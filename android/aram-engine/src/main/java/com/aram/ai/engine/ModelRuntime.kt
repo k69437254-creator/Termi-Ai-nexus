@@ -1,6 +1,8 @@
 package com.aram.ai.engine
 
 import android.content.Context
+import android.os.Process
+import android.util.Log
 import com.arm.aichat.AiChat
 import com.arm.aichat.InferenceEngine
 import com.aram.ai.data.ModelFiles
@@ -32,6 +34,8 @@ object ModelRuntime {
     @Volatile private var engine: InferenceEngine? = null
     @Volatile private var loaded: Boolean = false
     @Volatile private var acceptingRequests: Boolean = false
+    // SYSTEM_PROMPT_REUSE_FIX_V1: upstream accepts setSystemPrompt only once after load.
+    @Volatile private var systemPromptConfigured: Boolean = false
 
     private class QueuedGeneration(
         val priority: Int,
@@ -65,7 +69,11 @@ object ModelRuntime {
         require(modelFile.isFile && modelFile.length() >= ModelFiles.MIN_MODEL_BYTES) {
             "ملف النموذج غير موجود أو تنزيله غير مكتمل"
         }
-        if (loaded) return@withLock
+        if (loaded) {
+            Log.i(TAG, "MODEL_LOAD_SKIPPED pid=${Process.myPid()} reason=already_loaded")
+            return@withLock
+        }
+        Log.i(TAG, "MODEL_LOAD_BEGIN pid=${Process.myPid()} enginePresent=${engine != null}")
         val instance = engine ?: withContext(Dispatchers.Default) {
             AiChat.getInferenceEngine(context.applicationContext)
         }.also { engine = it }
@@ -77,11 +85,15 @@ object ModelRuntime {
             }
             if (initializedState is InferenceEngine.State.Error) throw initializedState.exception
             withContext(Dispatchers.IO) { instance.loadModel(modelFile.absolutePath) }
+            systemPromptConfigured = false
             loaded = true
             acceptingRequests = true
+            Log.i(TAG, "MODEL_LOAD_SUCCESS pid=${Process.myPid()} engine=${System.identityHashCode(instance)}")
         } catch (failure: Throwable) {
             acceptingRequests = false
             loaded = false
+            systemPromptConfigured = false
+            Log.e(TAG, "MODEL_LOAD_FAILED pid=${Process.myPid()}", failure)
             throw failure
         }
     }
@@ -176,7 +188,17 @@ object ModelRuntime {
         val instance = engine ?: error("لم يتم تحميل النموذج بعد")
         check(loaded) { "النموذج غير جاهز" }
         val output = StringBuilder()
-        instance.setSystemPrompt(request.systemPrompt)
+        if (!systemPromptConfigured) {
+            instance.setSystemPrompt(DEFAULT_NATIVE_SYSTEM_PROMPT)
+            systemPromptConfigured = true
+            Log.i(TAG, "NATIVE_SYSTEM_PROMPT_SET pid=${Process.myPid()}")
+        }
+        val effectivePrompt = buildString {
+            append("تعليمات هذه الرسالة:\n")
+            append(request.systemPrompt.ifBlank { DEFAULT_NATIVE_SYSTEM_PROMPT })
+            append("\n\nرسالة المستخدم:\n")
+            append(request.prompt)
+        }
         synchronized(request) {
             if (request.cancelRequested || request.result.isCancelled) {
                 throw CancellationException("تم إلغاء الطلب قبل بدء التوليد")
@@ -185,7 +207,7 @@ object ModelRuntime {
             request.nativeStarted = true
         }
         withContext(Dispatchers.Default) {
-            instance.sendUserPrompt(request.prompt, request.maxTokens).collect { token ->
+            instance.sendUserPrompt(effectivePrompt, request.maxTokens).collect { token ->
                 output.append(token)
                 request.onToken(token)
             }
@@ -195,6 +217,7 @@ object ModelRuntime {
 
     fun pendingRequestCount(): Int = synchronized(queueMonitor) { pending.count { !it.result.isCancelled } }
 
+    private const val DEFAULT_NATIVE_SYSTEM_PROMPT = "أنت مساعد Aram AI. أجب بدقة ووضوح."
     private const val MAX_PENDING_REQUESTS = 12
     private const val OWNER_PRIORITY = 0
     private const val MAX_SAFE_OUTPUT_TOKENS = 512
@@ -205,7 +228,8 @@ object ModelRuntime {
         withContext(Dispatchers.IO) { instance.bench(pp = 256, tg = 64, pl = 1, nr = 1) }
     }
 
-    suspend fun unload() {
+    suspend fun unload(reason: String = "unspecified") {
+        Log.w(TAG, "MODEL_UNLOAD_REQUEST pid=${Process.myPid()} reason=$reason loaded=$loaded")
         acceptingRequests = false
         synchronized(queueMonitor) {
             while (pending.isNotEmpty()) {
@@ -219,10 +243,14 @@ object ModelRuntime {
                 val current = engine
                 engine = null
                 loaded = false
+                systemPromptConfigured = false
                 if (current != null) withContext(Dispatchers.IO) { current.cleanUp() }
+                Log.i(TAG, "MODEL_UNLOAD_COMPLETE pid=${Process.myPid()} reason=$reason")
             }
         }
     }
+
+    private const val TAG = "AramModelRuntime"
 
     fun isLoaded(): Boolean = loaded && acceptingRequests
 }

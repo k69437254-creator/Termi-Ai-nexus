@@ -120,7 +120,7 @@ class AramEngineService : Service() {
                 } catch (error: Throwable) {
                     runCatching { server?.stop() }
                     server = null
-                    runCatching { ModelRuntime.unload() }
+                    runCatching { ModelRuntime.unload("startup_failure:${error.javaClass.simpleName}") }
 
                     AppPrefs.setEngineState(
                         this@AramEngineService,
@@ -160,7 +160,7 @@ class AramEngineService : Service() {
 
                 runCatching { server?.stop() }
                 server = null
-                runCatching { ModelRuntime.unload() }
+                runCatching { ModelRuntime.unload("user_requested_stop") }
 
                 AppPrefs.setEngineState(
                     this@AramEngineService,
