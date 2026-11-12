@@ -37,6 +37,43 @@ class MemoryStore {
   Future<void> addAgent(String id, String note) => _append(_agentKey(id), note);
   Future<void> addProject(String id, String note) => _append(_projectKey(id), note);
 
+  static const String _managerConversationKey = 'memory.manager.conversation.v1';
+
+  Future<List<Map<String, dynamic>>> managerConversation() async {
+    final raw = await _vault.read(_managerConversationKey);
+    if (raw.isEmpty) return <Map<String, dynamic>>[];
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return <Map<String, dynamic>>[];
+      return decoded
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
+    } catch (_) {
+      return <Map<String, dynamic>>[];
+    }
+  }
+
+  Future<void> saveManagerConversation(
+    List<Map<String, dynamic>> messages,
+  ) async {
+    final key = _managerConversationKey;
+    final bounded = messages.length > 40
+        ? messages.sublist(messages.length - 40)
+        : messages;
+    final payload = jsonEncode(bounded);
+    final previous = _writeQueues[key] ?? Future<void>.value();
+    final next = previous.catchError((Object _) {}).then((_) async {
+      await _vault.write(key, payload);
+    });
+    _writeQueues[key] = next;
+    try {
+      await next;
+    } finally {
+      if (identical(_writeQueues[key], next)) _writeQueues.remove(key);
+    }
+  }
+
   Future<String> contextFor({required String agentId, required String projectId}) async {
     final t = await team();
     final a = await agent(agentId);

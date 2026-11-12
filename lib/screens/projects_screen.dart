@@ -1,39 +1,172 @@
 import 'package:material_ui/material_ui.dart';
+
+import '../core/nexus_theme.dart';
 import '../core/project_coordinator.dart';
 import '../models/domain.dart';
 
 class ProjectsScreen extends StatefulWidget {
   const ProjectsScreen({super.key, required this.coordinator});
   final ProjectCoordinator coordinator;
+
   @override
   State<ProjectsScreen> createState() => _ProjectsScreenState();
 }
 
 class _ProjectsScreenState extends State<ProjectsScreen> {
   late Future<List<ProjectRecord>> _future;
+
   @override
-  void initState() { super.initState(); _future = widget.coordinator.listProjects(); }
-  void _refresh() => setState(() => _future = widget.coordinator.listProjects());
+  void initState() {
+    super.initState();
+    _future = widget.coordinator.listProjects();
+  }
+
+  Future<void> _refresh() async {
+    final next = widget.coordinator.listProjects();
+    setState(() => _future = next);
+    await next;
+  }
 
   @override
   Widget build(BuildContext context) => FutureBuilder<List<ProjectRecord>>(
-    future: _future,
-    builder: (context, snapshot) {
-      if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
-      final projects = snapshot.data ?? [];
-      if (projects.isEmpty) return Center(child: Padding(padding: const EdgeInsets.all(28), child: Column(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.folder_open, size: 45, color: Color(0xFF5B7897)), const SizedBox(height: 12), const Text('لا توجد مشاريع بعد', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17)), const SizedBox(height: 6), const Text('ابدأ مشروعاً من المساعد الذكي ليظهر هنا.', textAlign: TextAlign.center, style: TextStyle(color: Color(0xFF92A8C0))), const SizedBox(height: 12), OutlinedButton(onPressed: _refresh, child: const Text('تحديث'))])));
-      return RefreshIndicator(onRefresh: () async => _refresh(), child: ListView(padding: const EdgeInsets.all(14), children: [
-        Row(children: [const Expanded(child: Text('مساحات العمل', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800))), Text('${projects.length} مشاريع', style: const TextStyle(color: Color(0xFF84CADD), fontSize: 11))]),
-        const SizedBox(height: 10),
-        ...projects.map((project) => Card(child: ListTile(leading: const CircleAvatar(backgroundColor: Color(0xFF19364D), child: Icon(Icons.code, color: Color(0xFF77C9DD))), title: Text(project.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800)), subtitle: Text('${project.tasks.where((e) => e.status == TaskStatus.completed).length}/${project.tasks.length} مهام مكتملة\n${project.workspacePath}', maxLines: 2, overflow: TextOverflow.ellipsis), isThreeLine: true, trailing: const Icon(Icons.chevron_left), onTap: () => showModalBottomSheet(context: context, isScrollControlled: true, builder: (_) => _ProjectDetails(project: project))))),
-      ]));
-    },
-  );
+        future: _future,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final projects = snapshot.data ?? [];
+          return RefreshIndicator(
+            onRefresh: _refresh,
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(16, 5, 16, 25),
+              children: [
+                NexusPageHeader(
+                  title: 'مساحات العمل',
+                  subtitle: 'كل مشروع يحتفظ بطلبه وخطته ونتائج وكلائه داخل مساحة مستقلة.',
+                  padding: const EdgeInsets.fromLTRB(0, 12, 0, 17),
+                  trailing: NexusStatusPill('${projects.length} مشاريع', icon: Icons.folder_copy_outlined),
+                ),
+                if (projects.isEmpty)
+                  const NexusGlassPanel(
+                    padding: EdgeInsets.symmetric(horizontal: 22, vertical: 30),
+                    child: Column(children: [
+                      NexusIconTile(Icons.folder_open_rounded, size: 54),
+                      SizedBox(height: 14),
+                      Text('مساحة العمل ما زالت فارغة', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
+                      SizedBox(height: 6),
+                      Text('ابدأ من محادثة المساعد الذكي، وستظهر خططك ومشاريعك هنا.', textAlign: TextAlign.center, style: TextStyle(color: NexusPalette.muted, fontSize: 11, height: 1.5)),
+                    ]),
+                  )
+                else
+                  ...projects.map((project) => _ProjectCard(
+                        project: project,
+                        onTap: () => showModalBottomSheet<void>(
+                          context: context,
+                          isScrollControlled: true,
+                          builder: (_) => _ProjectDetails(project: project),
+                        ),
+                      )),
+              ],
+            ),
+          );
+        },
+      );
+}
+
+class _ProjectCard extends StatelessWidget {
+  const _ProjectCard({required this.project, required this.onTap});
+  final ProjectRecord project;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final done = project.tasks.where((task) => task.status == TaskStatus.completed).length;
+    final total = project.tasks.length;
+    final progress = total == 0 ? 0.0 : done / total;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 11),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(21),
+          onTap: onTap,
+          child: NexusGlassPanel(
+            padding: const EdgeInsets.all(15),
+            radius: 21,
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                const NexusIconTile(Icons.code_rounded),
+                const SizedBox(width: 11),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(project.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: NexusPalette.text, fontWeight: FontWeight.w900, fontSize: 13)),
+                  const SizedBox(height: 4),
+                  Text('${project.tasks.length} مهام • ${project.createdAt.toLocal().toString().split('.').first}', style: const TextStyle(color: NexusPalette.muted, fontSize: 9)),
+                ])),
+                const Icon(Icons.chevron_left_rounded, color: NexusPalette.subtle),
+              ]),
+              const SizedBox(height: 13),
+              Row(children: [
+                Expanded(child: Text('$done من $total مهام مكتملة', style: const TextStyle(color: NexusPalette.muted, fontSize: 10))),
+                Text('${(progress * 100).round()}%', style: const TextStyle(color: NexusPalette.primaryLight, fontWeight: FontWeight.w900, fontSize: 10)),
+              ]),
+              const SizedBox(height: 7),
+              ClipRRect(borderRadius: BorderRadius.circular(8), child: LinearProgressIndicator(value: progress, minHeight: 5, backgroundColor: NexusPalette.border, color: NexusPalette.primary)),
+              const SizedBox(height: 9),
+              Text(project.workspacePath, maxLines: 1, overflow: TextOverflow.ellipsis, textDirection: TextDirection.ltr, style: const TextStyle(color: NexusPalette.subtle, fontSize: 9)),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _ProjectDetails extends StatelessWidget {
   const _ProjectDetails({required this.project});
   final ProjectRecord project;
+
   @override
-  Widget build(BuildContext context) => SafeArea(child: SizedBox(height: MediaQuery.sizeOf(context).height * 0.78, child: SingleChildScrollView(padding: const EdgeInsets.all(18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(project.name, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)), const SizedBox(height: 7), Text(project.request, style: const TextStyle(color: Color(0xFF9CB0C7))), const Divider(height: 24), ...project.tasks.map((task) => ListTile(dense: true, contentPadding: EdgeInsets.zero, leading: Icon(task.status == TaskStatus.completed ? Icons.check_circle : Icons.circle_outlined, color: task.status == TaskStatus.completed ? const Color(0xFF58CFA1) : const Color(0xFF8199B4)), title: Text(task.title), subtitle: Text('${task.agentId} • ${task.status.name}'))), const SizedBox(height: 12)]))));
+  Widget build(BuildContext context) => SafeArea(
+        child: SizedBox(
+          height: MediaQuery.sizeOf(context).height * 0.82,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(18, 8, 18, 25),
+            children: [
+              Text(project.name, style: const TextStyle(color: NexusPalette.text, fontWeight: FontWeight.w900, fontSize: 18)),
+              const SizedBox(height: 7),
+              Text(project.request, style: const TextStyle(color: NexusPalette.muted, fontSize: 12, height: 1.5)),
+              const SizedBox(height: 15),
+              const NexusSectionHeader('مسار التنفيذ', subtitle: 'الحالة الحالية لكل مهمة في هذه المساحة.'),
+              ...project.tasks.asMap().entries.map((entry) {
+                final task = entry.value;
+                final color = switch (task.status) {
+                  TaskStatus.completed => NexusPalette.success,
+                  TaskStatus.running => NexusPalette.primaryLight,
+                  TaskStatus.failed || TaskStatus.rolledBack => NexusPalette.danger,
+                  _ => NexusPalette.muted,
+                };
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 9),
+                  child: NexusGlassPanel(
+                    padding: const EdgeInsets.all(12),
+                    radius: 16,
+                    blur: 7,
+                    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      NexusIconTile(task.status == TaskStatus.completed ? Icons.check_rounded : Icons.task_alt_rounded, color: color, size: 35),
+                      const SizedBox(width: 10),
+                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text('${entry.key + 1}. ${task.title}', style: const TextStyle(color: NexusPalette.text, fontWeight: FontWeight.w800, fontSize: 11)),
+                        const SizedBox(height: 4),
+                        Text('${task.agentId} • ${task.status.name}', style: TextStyle(color: color, fontSize: 9)),
+                        if (task.result.isNotEmpty) ...[const SizedBox(height: 6), Text(task.result, style: const TextStyle(color: NexusPalette.muted, fontSize: 10, height: 1.4))],
+                      ])),
+                    ]),
+                  ),
+                );
+              }),
+            ],
+          ),
+        ),
+      );
 }

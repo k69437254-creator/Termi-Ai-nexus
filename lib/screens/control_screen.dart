@@ -1,26 +1,92 @@
 import 'package:material_ui/material_ui.dart';
 
+import '../core/nexus_theme.dart';
+
 class ControlScreen extends StatelessWidget {
   const ControlScreen({super.key});
+
   @override
-  Widget build(BuildContext context) => ListView(padding: const EdgeInsets.all(16), children: [
-    const Text('مركز التحكم', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
-    const SizedBox(height: 4), const Text('نظرة تشغيلية مختصرة، مع الإعدادات التقنية في صفحة منفصلة.', style: TextStyle(color: Color(0xFF91A6BE), fontSize: 12)),
-    const SizedBox(height: 14),
-    const _StatusCard(icon: Icons.hub, title: 'منسق الفريق', detail: 'خطة → موافقة المستخدم → تنفيذ مهام الوكلاء → تحقق من الملفات.', state: 'جاهز'),
-    const _StatusCard(icon: Icons.memory, title: 'الذاكرة المزدوجة', detail: 'ذاكرة منفصلة لكل وكيل + ذاكرة فريق + سياق مستقل لكل مشروع.', state: 'محلي'),
-    const _StatusCard(icon: Icons.restore, title: 'الاستعادة التلقائية', detail: 'نقطة حفظ قبل المهمة، حتى 3 محاولات، ثم استرجاع تغييرات المهمة عند الفشل.', state: 'مفعّل'),
-    const _StatusCard(icon: Icons.terminal, title: 'محرك الطرفية', detail: 'Android /system/bin/sh عبر PTY. توزيعة Linux كاملة غير مضمّنة.', state: 'PTY'),
-    const _StatusCard(icon: Icons.code, title: 'GitHub', detail: 'REST API للمستودعات وIssues وPull Requests. عمليات Git المحلية تحتاج git binary.', state: 'يتطلب ربطاً'),
-    const SizedBox(height: 12),
-    Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('طبقة تقنية متقدمة', style: TextStyle(fontWeight: FontWeight.w800)), const SizedBox(height: 8), const Text('هذه النسخة تعرض إعدادات التشغيل المتاحة داخل التطبيق. لا تعرض أرقام CPU أو RAM أو حالة خدمات وهمية؛ يمكن إضافة قراءة موارد الجهاز وخدمات النظام لاحقاً عبر طبقة Android مخصصة.', style: TextStyle(color: Color(0xFF9CB0C7), height: 1.5, fontSize: 12))]))),
-  ]);
+  Widget build(BuildContext context) => ListView(
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 24),
+        children: [
+          const NexusPageHeader(
+            title: 'مركز التحكم',
+            subtitle: 'صورة تشغيلية عن طبقات النظام والقدرات المتاحة فعليًا.',
+            padding: EdgeInsets.fromLTRB(2, 12, 2, 18),
+          ),
+          const _StatusCard(
+            icon: Icons.hub_rounded,
+            title: 'منسق الفريق',
+            detail: 'خطة واضحة ← موافقة المستخدم ← تنفيذ المهام ← مراجعة النتائج.',
+            state: 'جاهز',
+            color: NexusPalette.success,
+          ),
+          const _StatusCard(
+            icon: Icons.psychology_alt_rounded,
+            title: 'الذاكرة المزدوجة',
+            detail: 'ذاكرة منفصلة لكل وكيل، وذاكرة فريق، وسياق مستقل لكل مشروع.',
+            state: 'محلي',
+            color: NexusPalette.primaryLight,
+          ),
+          const _StatusCard(
+            icon: Icons.restore_rounded,
+            title: 'الاستعادة التلقائية',
+            detail: 'نقطة حفظ قبل المهمة، ومحاولات إصلاح محدودة، ثم استعادة تغييرات المهمة عند الفشل.',
+            state: 'مفعّل',
+            color: NexusPalette.success,
+          ),
+          const _StatusCard(
+            icon: Icons.terminal_rounded,
+            title: 'محرك الطرفية',
+            detail: 'Android /system/bin/sh عبر PTY. لا توجد توزيعة Linux كاملة مضمنة.',
+            state: 'PTY',
+            color: NexusPalette.primaryLight,
+          ),
+          const _StatusCard(
+            icon: Icons.code_rounded,
+            title: 'GitHub',
+            detail: 'REST API للمستودعات وIssues وPull Requests. العمليات المحلية تحتاج Git executable.',
+            state: 'حسب الربط',
+            color: NexusPalette.warning,
+          ),
+          const SizedBox(height: 7),
+          const NexusGlassPanel(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [NexusIconTile(Icons.insights_rounded, size: 38), SizedBox(width: 10), Text('طبقة تقنية متقدمة', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14))]),
+              SizedBox(height: 11),
+              Text('نعرض المعلومات التي توفرها الخدمات الحالية فقط. لا نعرض أرقام CPU أو RAM أو حالة نشاط وهمية؛ قراءة موارد الجهاز تحتاج تكاملًا أصليًا منفصلًا.', style: TextStyle(color: NexusPalette.muted, height: 1.55, fontSize: 11)),
+            ]),
+          ),
+        ],
+      );
 }
 
 class _StatusCard extends StatelessWidget {
-  const _StatusCard({required this.icon, required this.title, required this.detail, required this.state});
+  const _StatusCard({required this.icon, required this.title, required this.detail, required this.state, required this.color});
   final IconData icon;
-  final String title, detail, state;
+  final String title;
+  final String detail;
+  final String state;
+  final Color color;
+
   @override
-  Widget build(BuildContext context) => Card(child: Padding(padding: const EdgeInsets.all(14), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Container(width: 40, height: 40, decoration: BoxDecoration(color: const Color(0xFF1A344D), borderRadius: BorderRadius.circular(12)), child: Icon(icon, color: const Color(0xFF7DCDDF)),), const SizedBox(width: 12), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: const TextStyle(fontWeight: FontWeight.w800)), const SizedBox(height: 4), Text(detail, style: const TextStyle(color: Color(0xFF96ABC2), fontSize: 11, height: 1.4))])), const SizedBox(width: 6), Text(state, style: const TextStyle(color: Color(0xFF78CADD), fontSize: 10, fontWeight: FontWeight.w700))])));
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: NexusGlassPanel(
+          padding: const EdgeInsets.all(14),
+          radius: 19,
+          blur: 8,
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            NexusIconTile(icon, color: color, size: 42),
+            const SizedBox(width: 12),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(title, style: const TextStyle(color: NexusPalette.text, fontWeight: FontWeight.w900, fontSize: 13)),
+              const SizedBox(height: 5),
+              Text(detail, style: const TextStyle(color: NexusPalette.muted, fontSize: 10, height: 1.5)),
+            ])),
+            const SizedBox(width: 8),
+            NexusStatusPill(state, color: color),
+          ]),
+        ),
+      );
 }

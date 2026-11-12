@@ -1,9 +1,12 @@
 import 'package:material_ui/material_ui.dart';
+
+import '../core/nexus_theme.dart';
 import '../core/secure_vault.dart';
 import '../models/domain.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
+
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
@@ -20,13 +23,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _message = '';
 
   @override
-  void initState() { super.initState(); for (final a in AgentProfile.defaults) { _agentKeys[a.id] = TextEditingController(); } _load(); }
+  void initState() {
+    super.initState();
+    for (final agent in AgentProfile.defaults) {
+      _agentKeys[agent.id] = TextEditingController();
+    }
+    _load();
+  }
+
   Future<void> _load() async {
     _base.text = await _vault.read('ai.base_url');
-    _model.text = (await _vault.read('ai.model')).isEmpty ? 'Spark-X2.6-1.7B' : await _vault.read('ai.model');
+    final storedModel = await _vault.read('ai.model');
+    _model.text = storedModel.isEmpty ? 'Spark-X2.6-1.7B' : storedModel;
     _ownerKey.text = await _vault.read('ai.owner_key');
     _githubToken.text = await _vault.read('github.token');
-    for (final a in AgentProfile.defaults) { _agentKeys[a.id]!.text = await _vault.read('ai.agent.${a.id}.key'); }
+    for (final agent in AgentProfile.defaults) {
+      _agentKeys[agent.id]!.text = await _vault.read('ai.agent.${agent.id}.key');
+    }
     if (mounted) setState(() => _loading = false);
   }
 
@@ -37,57 +50,129 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await _vault.write('ai.model', _model.text);
       await _vault.write('ai.owner_key', _ownerKey.text);
       await _vault.write('github.token', _githubToken.text);
-      for (final a in AgentProfile.defaults) { await _vault.write('ai.agent.${a.id}.key', _agentKeys[a.id]!.text); }
+      for (final agent in AgentProfile.defaults) {
+        await _vault.write('ai.agent.${agent.id}.key', _agentKeys[agent.id]!.text);
+      }
       if (mounted) setState(() => _message = 'حُفظت الإعدادات الحساسة في التخزين الآمن للجهاز.');
-    } catch (e) { if (mounted) setState(() => _message = 'فشل الحفظ: $e'); }
-    finally { if (mounted) setState(() => _saving = false); }
+    } catch (error) {
+      if (mounted) setState(() => _message = 'فشل الحفظ: $error');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   @override
   void dispose() {
-    _base.dispose(); _model.dispose(); _ownerKey.dispose(); _githubToken.dispose();
-    for (final c in _agentKeys.values) { c.dispose(); }
+    _base.dispose();
+    _model.dispose();
+    _ownerKey.dispose();
+    _githubToken.dispose();
+    for (final controller in _agentKeys.values) { controller.dispose(); }
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
-    return ListView(padding: const EdgeInsets.all(16), children: [
-      const Text('إعدادات النظام', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
-      const SizedBox(height: 4), const Text('تُحفظ المفاتيح في Android Keystore-backed secure storage عبر flutter_secure_storage.', style: TextStyle(color: Color(0xFF91A6BE), fontSize: 11, height: 1.5)),
-      const SizedBox(height: 18),
-      const _SectionTitle('AI ENGINE / ARAM AI'),
-      TextField(controller: _base, keyboardType: TextInputType.url, decoration: const InputDecoration(labelText: 'عنوان API Base URL', hintText: 'https://your-gateway.example/v1', prefixIcon: Icon(Icons.link))),
-      const SizedBox(height: 10),
-      TextField(controller: _model, decoration: const InputDecoration(labelText: 'اسم النموذج', prefixIcon: Icon(Icons.memory))),
-      const SizedBox(height: 10),
-      TextField(controller: _ownerKey, obscureText: true, decoration: const InputDecoration(labelText: 'مفتاح المالك / المفتاح الافتراضي', prefixIcon: Icon(Icons.key))),
-      const SizedBox(height: 8),
-      const Text('ضع عنوان البوابة الفعلي الذي توفره خدمتك. لا يوجد عنوان افتراضي مفترض داخل المشروع.', style: TextStyle(color: Color(0xFF8FA5BE), fontSize: 11)),
-      const SizedBox(height: 18),
-      const _SectionTitle('INDEPENDENT AGENT KEYS'),
-      const Text('كل وكيل يستخدم مفتاحه الخاص إن توفر، وإلا يعود إلى مفتاح المالك.', style: TextStyle(color: Color(0xFF8FA5BE), fontSize: 11)),
-      const SizedBox(height: 8),
-      ...AgentProfile.defaults.map((agent) => Padding(padding: const EdgeInsets.only(bottom: 9), child: TextField(controller: _agentKeys[agent.id], obscureText: true, decoration: InputDecoration(labelText: agent.name, prefixIcon: const Icon(Icons.vpn_key_outlined))))),
-      const SizedBox(height: 12),
-      const _SectionTitle('GITHUB CONNECTION'),
-      TextField(controller: _githubToken, obscureText: true, decoration: const InputDecoration(labelText: 'GitHub Personal Access Token', prefixIcon: Icon(Icons.code))),
-      const SizedBox(height: 8),
-      const Text('امنح أقل صلاحيات ممكنة. عمليات إنشاء المستودعات والتذاكر وطلبات الدمج تحتاج صلاحيات مناسبة في GitHub.', style: TextStyle(color: Color(0xFF8FA5BE), fontSize: 11, height: 1.4)),
-      const SizedBox(height: 18),
-      FilledButton.icon(onPressed: _saving ? null : _save, icon: _saving ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.save_outlined), label: Text(_saving ? 'جارٍ الحفظ…' : 'حفظ الإعدادات')),
-      if (_message.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 10), child: Text(_message, style: const TextStyle(color: Color(0xFF83DAB7), fontSize: 12))),
-      const Divider(height: 32),
-      const _SectionTitle('DEVELOPER'),
-      const ListTile(contentPadding: EdgeInsets.zero, leading: CircleAvatar(child: Icon(Icons.code)), title: Text('Aram Aoyal'), subtitle: Text('Telegram: https://t.me/ro_gy')),
-    ]);
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 5, 16, 28),
+      children: [
+        const NexusPageHeader(
+          title: 'إعدادات النظام',
+          subtitle: 'إدارة الاتصال والمفاتيح الخاصة بالمالك والوكلاء والتكاملات.',
+          padding: EdgeInsets.fromLTRB(0, 12, 0, 18),
+        ),
+        _SettingSection(
+          icon: Icons.memory_rounded,
+          title: 'AI ENGINE / ARAM AI',
+          description: 'إعداد بوابة الذكاء الاصطناعي والنموذج المستخدم عند الاتصال ببوابة خارجية.',
+          child: Column(children: [
+            TextField(controller: _base, keyboardType: TextInputType.url, textDirection: TextDirection.ltr, decoration: const InputDecoration(labelText: 'عنوان API Base URL', hintText: 'https://your-gateway.example/v1', prefixIcon: Icon(Icons.link_rounded))),
+            const SizedBox(height: 10),
+            TextField(controller: _model, decoration: const InputDecoration(labelText: 'اسم النموذج', prefixIcon: Icon(Icons.memory_rounded))),
+            const SizedBox(height: 10),
+            TextField(controller: _ownerKey, obscureText: true, decoration: const InputDecoration(labelText: 'مفتاح المالك / المفتاح الافتراضي', prefixIcon: Icon(Icons.key_rounded))),
+            const SizedBox(height: 9),
+            const Text('اترك عنوان البوابة فارغًا لاستخدام محرك Aram AI المدمج عند توفره. لا يوجد عنوان أو مفتاح افتراضي مختلق.', style: TextStyle(color: NexusPalette.muted, fontSize: 10, height: 1.5)),
+          ]),
+        ),
+        _SettingSection(
+          icon: Icons.hub_rounded,
+          title: 'INDEPENDENT AGENT KEYS',
+          description: 'يمكن لكل وكيل استخدام مفتاحه الخاص، وإلا يعود إلى مفتاح المالك.',
+          child: Column(children: [
+            ...AgentProfile.defaults.map((agent) => Padding(
+                  padding: const EdgeInsets.only(bottom: 9),
+                  child: TextField(controller: _agentKeys[agent.id], obscureText: true, decoration: InputDecoration(labelText: agent.name, prefixIcon: const Icon(Icons.vpn_key_outlined))),
+                )),
+          ]),
+        ),
+        _SettingSection(
+          icon: Icons.code_rounded,
+          title: 'GITHUB CONNECTION',
+          description: 'أضف رمزًا بصلاحيات محدودة حسب العمليات التي تنوي استخدامها.',
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            TextField(controller: _githubToken, obscureText: true, textDirection: TextDirection.ltr, decoration: const InputDecoration(labelText: 'GitHub Personal Access Token', prefixIcon: Icon(Icons.key_rounded))),
+            const SizedBox(height: 8),
+            const Text('عمليات إنشاء المستودعات والتذاكر وطلبات الدمج تحتاج صلاحيات مناسبة في GitHub. لا تشارك الرمز مع أي جهة.', style: TextStyle(color: NexusPalette.muted, fontSize: 10, height: 1.5)),
+          ]),
+        ),
+        const SizedBox(height: 5),
+        FilledButton.icon(
+          onPressed: _saving ? null : _save,
+          icon: _saving ? const SizedBox(width: 17, height: 17, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.save_rounded),
+          label: Text(_saving ? 'جارٍ الحفظ…' : 'حفظ الإعدادات'),
+        ),
+        if (_message.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 10),
+            child: NexusGlassPanel(
+              padding: const EdgeInsets.all(12),
+              radius: 14,
+              tint: const Color(0xB31A2B27),
+              child: Text(_message, style: const TextStyle(color: NexusPalette.success, fontSize: 11)),
+            ),
+          ),
+        const SizedBox(height: 18),
+        const NexusSectionHeader('ABOUT', subtitle: 'معلومات المطوّر والتطبيق.'),
+        const NexusGlassPanel(
+          child: Row(children: [
+            NexusIconTile(Icons.code_rounded, size: 42),
+            SizedBox(width: 11),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Aram Aoyal', style: TextStyle(color: NexusPalette.text, fontWeight: FontWeight.w900, fontSize: 12)),
+              SizedBox(height: 3),
+              Text('TermiAI-Nexus • Obsidian Interface', style: TextStyle(color: NexusPalette.muted, fontSize: 10)),
+              SizedBox(height: 3),
+              Text('Telegram: https://t.me/ro_gy', textDirection: TextDirection.ltr, style: TextStyle(color: NexusPalette.primaryLight, fontSize: 10)),
+            ])),
+          ]),
+        ),
+      ],
+    );
   }
 }
 
-class _SectionTitle extends StatelessWidget {
-  const _SectionTitle(this.title);
+class _SettingSection extends StatelessWidget {
+  const _SettingSection({required this.icon, required this.title, required this.description, required this.child});
+  final IconData icon;
   final String title;
+  final String description;
+  final Widget child;
+
   @override
-  Widget build(BuildContext context) => Padding(padding: const EdgeInsets.only(bottom: 10), child: Text(title, style: const TextStyle(color: Color(0xFF78CADD), fontSize: 10, letterSpacing: 1.4, fontWeight: FontWeight.w900)));
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: 13),
+        child: NexusGlassPanel(
+          padding: const EdgeInsets.all(15),
+          radius: 21,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [NexusIconTile(icon, size: 38), const SizedBox(width: 10), Expanded(child: Text(title, style: const TextStyle(color: NexusPalette.primaryLight, fontSize: 10, letterSpacing: 1.1, fontWeight: FontWeight.w900)))]),
+            const SizedBox(height: 8),
+            Text(description, style: const TextStyle(color: NexusPalette.muted, fontSize: 10, height: 1.45)),
+            const SizedBox(height: 14),
+            child,
+          ]),
+        ),
+      );
 }

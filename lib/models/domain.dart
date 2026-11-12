@@ -44,13 +44,22 @@ class PlanTask {
     'risk': risk, 'status': status.name, 'result': result,
   };
 
-  factory PlanTask.fromJson(Map<String, dynamic> json) => PlanTask(
-    id: '${json['id'] ?? DateTime.now().microsecondsSinceEpoch}',
-    title: '${json['title'] ?? 'مهمة غير معنونة'}',
-    description: '${json['description'] ?? ''}',
-    agentId: '${json['agentId'] ?? json['agent'] ?? 'developer'}',
-    risk: '${json['risk'] ?? 'low'}',
-  );
+  factory PlanTask.fromJson(Map<String, dynamic> json) {
+    final task = PlanTask(
+      id: '${json['id'] ?? DateTime.now().microsecondsSinceEpoch}',
+      title: '${json['title'] ?? 'مهمة غير معنونة'}',
+      description: '${json['description'] ?? ''}',
+      agentId: '${json['agentId'] ?? json['agent'] ?? 'developer'}',
+      risk: '${json['risk'] ?? 'low'}',
+    );
+    final savedStatus = json['status'];
+    task.status = TaskStatus.values.firstWhere(
+      (status) => status.name == savedStatus,
+      orElse: () => TaskStatus.pending,
+    );
+    task.result = '${json['result'] ?? ''}';
+    return task;
+  }
 }
 
 class ProjectRecord {
