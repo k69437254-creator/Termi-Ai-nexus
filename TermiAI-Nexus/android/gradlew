@@ -1,0 +1,29 @@
+#!/usr/bin/env sh
+# Lightweight Gradle bootstrap wrapper. Downloads the official pinned distribution
+# when it is not already cached; no binary wrapper JAR is stored in this source archive.
+set -eu
+APP_HOME="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+GRADLE_VERSION="8.13"
+GRADLE_USER_HOME="${GRADLE_USER_HOME:-$HOME/.gradle}"
+INSTALL_ROOT="$GRADLE_USER_HOME/wrapper/dists/termai-gradle-$GRADLE_VERSION"
+GRADLE_BIN="$INSTALL_ROOT/gradle-$GRADLE_VERSION/bin/gradle"
+if [ ! -x "$GRADLE_BIN" ]; then
+  mkdir -p "$INSTALL_ROOT"
+  ARCHIVE="$INSTALL_ROOT/gradle-$GRADLE_VERSION-bin.zip"
+  URL="https://services.gradle.org/distributions/gradle-$GRADLE_VERSION-bin.zip"
+  if command -v curl >/dev/null 2>&1; then
+    curl --fail --location --retry 3 --connect-timeout 20 "$URL" -o "$ARCHIVE"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -O "$ARCHIVE" "$URL"
+  else
+    echo "Gradle $GRADLE_VERSION is not cached and neither curl nor wget is installed." >&2
+    exit 1
+  fi
+  if ! command -v unzip >/dev/null 2>&1; then
+    echo "unzip is required to install the Gradle distribution." >&2
+    exit 1
+  fi
+  unzip -q -o "$ARCHIVE" -d "$INSTALL_ROOT"
+  rm -f "$ARCHIVE"
+fi
+exec "$GRADLE_BIN" -p "$APP_HOME" "$@"

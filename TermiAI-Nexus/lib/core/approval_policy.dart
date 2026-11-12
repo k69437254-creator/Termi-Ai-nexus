@@ -1,0 +1,37 @@
+class ApprovalDecision {
+  const ApprovalDecision({required this.requiresApproval, required this.reason});
+  final bool requiresApproval;
+  final String reason;
+}
+
+class ApprovalPolicy {
+  static final List<RegExp> _rules = [
+    RegExp(r'(^|\s)(sudo|su)(\s|$)', caseSensitive: false),
+    RegExp(r'\brm\s+(-[^\s]*[rf]|--recursive|--force)\b', caseSensitive: false),
+    RegExp(r'\b(mkfs|dd\s+if=|fdisk|parted|wipefs|reboot|shutdown)\b', caseSensitive: false),
+    RegExp(r'\b(curl|wget)\b[^\n]*(\||sh\b|bash\b)', caseSensitive: false),
+    RegExp(r'\b(git\s+push|git\s+reset\s+--hard|git\s+clean\s+-[a-z]*f)', caseSensitive: false),
+    RegExp(r'\b(chmod\s+777|chown\s+-R|setprop|mount|umount)\b', caseSensitive: false),
+    RegExp(r'\b(api[_-]?key|token|password|secret)\s*=', caseSensitive: false),
+  ];
+
+  static ApprovalDecision inspectCommand(String command) {
+    for (final rule in _rules) {
+      if (rule.hasMatch(command)) {
+        return const ApprovalDecision(requiresApproval: true, reason: 'الأمر قد يغيّر النظام أو يحذف بيانات أو ينقل أسراراً أو يكتب إلى خدمة خارجية.');
+      }
+    }
+    return const ApprovalDecision(requiresApproval: false, reason: 'لم تُطابق صيغة الأمر قواعد الخطر المعروفة. راجع الأمر قبل تشغيله.');
+  }
+
+  static bool validRelativePath(String path) {
+    final normalized = path.replaceAll('\\', '/').trim();
+    if (normalized.isEmpty || normalized.startsWith('/') || normalized.startsWith('~')) return false;
+    if (RegExp(r'^[a-zA-Z]:').hasMatch(normalized)) return false;
+    final segments = normalized.split('/');
+    if (segments.any((part) => part == '..' || part.isEmpty)) return false;
+    if (segments.first == '.termai' || segments.first == '.git') return false;
+    if (normalized.contains('\u0000')) return false;
+    return true;
+  }
+}
