@@ -72,9 +72,9 @@ jobs:
         shell: bash
         run: |
           echo "===== APK FILES ====="
-          find build android/app/build -type f -name '*.apk' -print 2>/dev/null || true
+          find build android/build android/app/build -type f -name '*.apk' -print 2>/dev/null || true
           echo "===== ANDROID OUTPUTS ====="
-          find android/app/build/outputs build/app/outputs -maxdepth 6 -type f -print 2>/dev/null || true
+          find android/build/app/outputs android/app/build/outputs build/app/outputs -maxdepth 6 -type f -print 2>/dev/null || true
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
