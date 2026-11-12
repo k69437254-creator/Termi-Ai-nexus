@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'memory_store.dart';
 import 'secure_vault.dart';
 import '../models/domain.dart';
 

@@ -50,7 +50,7 @@ class _V3 {
 }
 
 class _P2 {
-  const _P2(this.x, this.y, this.depth);
+  const _P2(this.x, this.y);
   final double x, y;
   Offset get offset => Offset(x, y);
 }

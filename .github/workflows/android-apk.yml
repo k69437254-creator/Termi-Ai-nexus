@@ -31,8 +31,16 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Generate Android platform files
-        run: flutter create --platforms=android --org com.aramaoyal --project-name termiai_nexus --no-pub .
+      - name: Configure Android local properties
+        shell: bash
+        run: |
+          FLUTTER_BIN="$(command -v flutter)"
+          test -n "$FLUTTER_BIN"
+          FLUTTER_ROOT="$(dirname "$(dirname "$(readlink -f "$FLUTTER_BIN")")")"
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          test -d "$FLUTTER_ROOT/packages/flutter_tools/gradle"
+          test -d "$SDK_ROOT"
+          printf 'flutter.sdk=%s\nsdk.dir=%s\n' "$FLUTTER_ROOT" "$SDK_ROOT" > android/local.properties
 
       - name: Set Android application label
         shell: bash
