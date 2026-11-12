@@ -26,6 +26,9 @@ android {
     }
     buildTypes {
         release {
+            // Sign CI release APKs so Android can install them.
+            // This is a temporary development signing identity, not a production key.
+            signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = false
             isShrinkResources = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
