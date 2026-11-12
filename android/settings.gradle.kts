@@ -1,8 +1,7 @@
-import java.util.Properties
 
 pluginManagement {
     val flutterSdkPath = run {
-        val properties = Properties()
+        val properties = java.util.Properties()
         val localProperties = file("local.properties")
         require(localProperties.exists()) { "Create android/local.properties with flutter.sdk and sdk.dir. See README.md." }
         localProperties.inputStream().use { properties.load(it) }
