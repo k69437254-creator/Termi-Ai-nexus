@@ -21,13 +21,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /** Runs Aram's single native model instance inside the TermiAI-Nexus app process. */
 class AramEngineService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val lifecycleMutex = Mutex()
+    private val lifecycleMutex = ModelOperationLock.mutex
     @Volatile private var server: com.aram.ai.server.ApiHttpServer? = null
     @Volatile private var starting = false
     private var wakeLock: PowerManager.WakeLock? = null
@@ -47,53 +46,93 @@ class AramEngineService : Service() {
             stopSelf(startId)
             return START_NOT_STICKY
         }
-        if (!starting && server == null) startEngine()
+        startEngine()
         return START_STICKY
     }
 
     private fun startEngine() {
-        if (starting || server != null) return
-        starting = true
-        AppPrefs.setEngineState(this, "STARTING", "تهيئة محرك Aram AI الداخلي…")
         scope.launch {
             lifecycleMutex.withLock {
+                if (starting || server != null) return@withLock
+
+                starting = true
+                AppPrefs.setEngineState(
+                    this@AramEngineService,
+                    "STARTING",
+                    "تهيئة محرك Aram AI الداخلي…"
+                )
+
                 try {
                     if (!ModelFiles.isModelReady(this@AramEngineService)) {
                         val currentId = AppPrefs.downloadId(this@AramEngineService)
+
                         if (!isDownloadActive(currentId)) {
                             val newId = ModelFiles.enqueueDownload(this@AramEngineService)
                             AppPrefs.setDownloadId(this@AramEngineService, newId)
                         }
-                        AppPrefs.setEngineState(this@AramEngineService, "DOWNLOADING_MODEL", "يجري تنزيل Spark-X2.6-1.7B إلى مساحة TermiAI-Nexus الخاصة…")
+
+                        AppPrefs.setEngineState(
+                            this@AramEngineService,
+                            "DOWNLOADING_MODEL",
+                            "يجري تنزيل Spark-X2.6-1.7B إلى مساحة TermiAI-Nexus الخاصة…"
+                        )
                         updateNotification("تنزيل نموذج Spark-X2.6-1.7B جارٍ عبر Download Manager")
-                        starting = false
                         stopForeground(STOP_FOREGROUND_REMOVE)
                         stopSelf()
                         return@withLock
                     }
 
-                    AppPrefs.setEngineState(this@AramEngineService, "LOADING_MODEL", "يجري تحميل النموذج في ذاكرة TermiAI-Nexus…")
+                    AppPrefs.setEngineState(
+                        this@AramEngineService,
+                        "LOADING_MODEL",
+                        "يجري تحميل النموذج في ذاكرة TermiAI-Nexus…"
+                    )
                     updateNotification("تحميل نموذج Spark-X2.6-1.7B…")
-                    ModelRuntime.load(this@AramEngineService, ModelFiles.modelFile(this@AramEngineService))
+
+                    ModelRuntime.load(
+                        this@AramEngineService,
+                        ModelFiles.modelFile(this@AramEngineService)
+                    )
                     acquireWakeLock()
 
-                    AppPrefs.setEngineState(this@AramEngineService, "STARTING_SERVER", "تم تحميل النموذج؛ تشغيل API المحلي على المنفذ 8766…")
-                    val localServer = com.aram.ai.server.ApiHttpServer("127.0.0.1", ApiKeyStore(this@AramEngineService), 8766)
+                    AppPrefs.setEngineState(
+                        this@AramEngineService,
+                        "STARTING_SERVER",
+                        "تم تحميل النموذج؛ تشغيل API المحلي على المنفذ 8766…"
+                    )
+
+                    val localServer = com.aram.ai.server.ApiHttpServer(
+                        "127.0.0.1",
+                        ApiKeyStore(this@AramEngineService),
+                        8766
+                    )
+
                     localServer.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
                     server = localServer
-                    starting = false
-                    AppPrefs.setEngineState(this@AramEngineService, "READY", "محرك Aram AI جاهز داخل TermiAI-Nexus · API على 127.0.0.1:8766")
+
+                    AppPrefs.setEngineState(
+                        this@AramEngineService,
+                        "READY",
+                        "محرك Aram AI جاهز داخل TermiAI-Nexus · API على 127.0.0.1:8766"
+                    )
                     updateNotification("Aram AI جاهز داخل TermiAI-Nexus · المنفذ 8766")
+
                 } catch (error: Throwable) {
-                    starting = false
                     runCatching { server?.stop() }
                     server = null
                     runCatching { ModelRuntime.unload() }
-                    AppPrefs.setEngineState(this@AramEngineService, "ERROR", "فشل تشغيل محرك Aram AI: ${error.message ?: error.javaClass.simpleName}")
+
+                    AppPrefs.setEngineState(
+                        this@AramEngineService,
+                        "ERROR",
+                        "فشل تشغيل محرك Aram AI: ${error.message ?: error.javaClass.simpleName}"
+                    )
                     updateNotification("فشل تشغيل محرك Aram AI · افتح TermiAI-Nexus للتفاصيل")
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     releaseWakeLock()
                     stopSelf()
+                } finally {
+                    starting = false
                 }
             }
         }
@@ -113,10 +152,22 @@ class AramEngineService : Service() {
     private fun stopEngine() {
         scope.launch {
             lifecycleMutex.withLock {
+                AppPrefs.setEngineState(
+                    this@AramEngineService,
+                    "STOPPING",
+                    "يجري إيقاف محرك Aram AI وتحرير موارده…"
+                )
+
                 runCatching { server?.stop() }
                 server = null
                 runCatching { ModelRuntime.unload() }
-                AppPrefs.setEngineState(this@AramEngineService, "STOPPED", "تم إيقاف محرك Aram AI وتحرير موارده")
+
+                AppPrefs.setEngineState(
+                    this@AramEngineService,
+                    "STOPPED",
+                    "تم إيقاف محرك Aram AI وتحرير موارده"
+                )
+
                 releaseWakeLock()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()

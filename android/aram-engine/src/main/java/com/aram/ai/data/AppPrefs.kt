@@ -9,7 +9,7 @@ data class EngineStatus(
     val updatedAt: Long,
     val startedAt: Long
 ) {
-    val isBusy: Boolean get() = state in setOf("STARTING", "DOWNLOADING_MODEL", "LOADING_MODEL", "STARTING_SERVER", "STOPPING")
+    val isBusy: Boolean get() = state in setOf("STARTING", "DOWNLOADING_MODEL", "IMPORTING_MODEL", "LOADING_MODEL", "STARTING_SERVER", "STOPPING")
     val isReady: Boolean get() = state == "READY"
 }
 
