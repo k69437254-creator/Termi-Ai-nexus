@@ -10,7 +10,7 @@ android {
 
     defaultConfig {
         applicationId = "com.aram.termaix"
-        minSdk = 26
+        minSdk = 33
         targetSdk = flutter.targetSdkVersion
         versionCode = 1
         versionName = "1.0.0"
@@ -43,3 +43,8 @@ kotlin {
 }
 
 flutter { source = "../.." }
+
+
+dependencies {
+    implementation(project(":aram-engine"))
+}

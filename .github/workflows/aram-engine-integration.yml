@@ -1,0 +1,74 @@
+name: TermiAI-Nexus with embedded Aram AI
+
+on:
+  push:
+    branches: [integration/aram-ai-engine]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout TermiAI-Nexus
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android native toolchains
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager --install \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;28.2.13676358" \
+            "ndk;29.0.13113456" \
+            "cmake;3.22.1" \
+            "cmake;3.31.6"
+
+      - name: Set up Flutter stable
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Configure Flutter and Android SDK paths
+        shell: bash
+        run: |
+          FLUTTER_ROOT="$(dirname "$(dirname "$(readlink -f "$(command -v flutter)")")")"
+          printf 'flutter.sdk=%s\nsdk.dir=%s\n' "$FLUTTER_ROOT" "$ANDROID_SDK_ROOT" > android/local.properties
+          flutter --version
+          flutter pub get
+
+      - name: Prepare pinned Aram AI native engine
+        run: bash scripts/prepare_aram_engine_ci.sh
+
+      - name: Build TermiAI-Nexus debug APK
+        run: flutter build apk --debug
+
+      - name: Collect APK
+        shell: bash
+        run: |
+          APK="$(find .. -type f -path '*/outputs/flutter-apk/app-debug.apk' -print -quit)"
+          test -n "$APK"
+          cp "$APK" "$GITHUB_WORKSPACE/TermiAI-Nexus-AramAI-debug.apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TermiAI-Nexus-AramAI-debug-APK
+          path: TermiAI-Nexus-AramAI-debug.apk
+          if-no-files-found: error
+          retention-days: 14

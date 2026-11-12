@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:flutter/services.dart';
 import 'memory_store.dart';
 import 'secure_vault.dart';
 import '../models/domain.dart';
@@ -15,6 +16,7 @@ class AiGateway {
   AiGateway({http.Client? client}) : _client = client ?? http.Client();
   final http.Client _client;
   final SecureVault _vault = SecureVault.instance;
+  static const MethodChannel _embeddedEngine = MethodChannel('termai/aram-engine');
 
   Future<String> get baseUrl => _vault.read('ai.base_url');
   Future<String> get model => _vault.read('ai.model');
@@ -22,6 +24,30 @@ class AiGateway {
   Future<String> chat({required String system, required String user, String? agentId, double temperature = 0.2}) async {
     final endpoint = (await baseUrl).trim();
     final selectedModel = (await model).trim();
+
+    // Use the in-process Android engine for blank/loopback endpoints. This avoids
+    // the previously observed localhost HTTP stall between TermiAI and Aram AI.
+    if (_shouldUseEmbeddedEngine(endpoint)) {
+      try {
+        final answer = await _embeddedEngine.invokeMethod<String>('generate', {
+          'system': system,
+          'user': user,
+          'agentId': agentId,
+          'temperature': temperature,
+          'maxTokens': 512,
+        });
+        if (answer == null || answer.trim().isEmpty) {
+          throw AiGatewayException('أعاد محرك Aram AI إجابة فارغة.');
+        }
+        return answer.trim();
+      } on PlatformException catch (error) {
+        throw AiGatewayException(error.message ?? 'تعذر تشغيل محرك Aram AI الداخلي (${error.code}).');
+      } catch (error) {
+        throw AiGatewayException('تعذر الاتصال بمحرك Aram AI الداخلي: $error');
+      }
+    }
+
+    // Preserve support for a user-configured remote OpenAI-compatible gateway.
     final masterKey = await _vault.read('ai.owner_key');
     final agentKey = agentId == null ? '' : await _vault.read('ai.agent.$agentId.key');
     final key = agentKey.trim().isNotEmpty ? agentKey.trim() : masterKey.trim();
@@ -43,8 +69,8 @@ class AiGateway {
           ],
         }),
       ).timeout(const Duration(seconds: 120));
-    } catch (e) {
-      throw AiGatewayException('تعذر الاتصال ببوابة الذكاء الاصطناعي: $e');
+    } catch (error) {
+      throw AiGatewayException('تعذر الاتصال ببوابة الذكاء الاصطناعي: $error');
     }
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw AiGatewayException('استجابة API غير ناجحة (${response.statusCode}): ${_trim(response.body, 600)}');
@@ -60,9 +86,19 @@ class AiGateway {
         if (text.isNotEmpty) return text;
       }
       throw const FormatException('Missing choices[0].message.content');
-    } catch (e) {
-      throw AiGatewayException('صيغة استجابة API غير متوافقة مع OpenAI Chat Completions: $e');
+    } catch (error) {
+      throw AiGatewayException('صيغة استجابة API غير متوافقة مع OpenAI Chat Completions: $error');
     }
+  }
+
+  bool _shouldUseEmbeddedEngine(String endpoint) {
+    if (endpoint.trim().isEmpty) return true;
+    final uri = Uri.tryParse(endpoint);
+    if (uri == null) return false;
+    final host = uri.host.toLowerCase();
+    final isLoopback = host == '127.0.0.1' || host == 'localhost' || host == '::1';
+    // Do not hijack other local developer gateways (for example localhost:8000).
+    return isLoopback && (uri.port == 8765 || uri.port == 8766);
   }
 
   Uri _completionUri(String base) {
