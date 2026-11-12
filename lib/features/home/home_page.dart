@@ -1,3 +1,4 @@
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 
 import '../../app/app_theme.dart';
@@ -187,7 +188,7 @@ class _TeamRoomPreview extends StatelessWidget {
           Positioned.fill(
             child: CustomPaint(painter: _GridPainter()),
           ),
-          Align(
+          const Align(
             alignment: Alignment.center,
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
