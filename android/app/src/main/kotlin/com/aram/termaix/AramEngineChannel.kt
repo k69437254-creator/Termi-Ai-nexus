@@ -88,7 +88,7 @@ object AramEngineChannel {
                     "issueClientKey" -> {
                         val name = call.argument<String>("name") ?: "مفتاح عميل"
                         val quota = call.argument<Int>("dailyQuota") ?: 100
-                        val issued = keyStore.issueClientKey(name, quota)
+                        val issued = keyStore.issueClient(name, quota)
                         result.success(mapOf("secret" to issued.secret, "id" to issued.record.id, "prefix" to issued.record.prefix, "role" to issued.record.role, "dailyQuota" to issued.record.dailyQuota))
                     }
                     "listApiKeys" -> {
