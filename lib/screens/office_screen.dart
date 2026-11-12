@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import '../widgets/virtual_office_3d.dart';
 
 class OfficeScreen extends StatelessWidget {

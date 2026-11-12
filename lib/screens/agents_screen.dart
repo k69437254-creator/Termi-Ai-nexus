@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import '../core/memory_store.dart';
 import '../core/ai_gateway.dart';
 import '../models/domain.dart';
