@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 import '../core/nexus_theme.dart';
 import '../core/project_coordinator.dart';
 import '../models/domain.dart';
+import '../widgets/agent_avatar.dart';
 
 class AssistantScreen extends StatefulWidget {
   const AssistantScreen({super.key, required this.coordinator, this.onBack});
@@ -325,28 +326,15 @@ class _AssistantScreenState extends State<AssistantScreen> {
               onPressed: widget.onBack,
               icon: const Icon(Icons.arrow_forward_rounded),
             ),
-            Container(
-              width: 42,
-              height: 42,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [NexusPalette.primaryLight, NexusPalette.primaryDeep],
-                ),
-                boxShadow: const [BoxShadow(color: Color(0x3300F0FF), blurRadius: 16)],
-              ),
-              child: const Icon(Icons.auto_awesome_rounded, color: Colors.white, size: 21),
-            ),
+            AgentAvatar(agent: AgentProfile.defaults.first, size: 46),
             const SizedBox(width: 11),
             const Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Nexus Director', style: TextStyle(color: NexusPalette.text, fontSize: 14, fontWeight: FontWeight.w900)),
+                  Text('المدير الرئيسي', style: TextStyle(color: NexusPalette.text, fontSize: 14, fontWeight: FontWeight.w900)),
                   SizedBox(height: 3),
-                  Text('مدير الفريق الذكي • تخطيط ومتابعة', style: TextStyle(color: NexusPalette.muted, fontSize: 10)),
+                  Text('يفهم الطلبات ويخطط ويوزّع العمل', style: TextStyle(color: NexusPalette.muted, fontSize: 10)),
                 ],
               ),
             ),
@@ -450,12 +438,12 @@ class _MessageBubble extends StatelessWidget {
             crossAxisAlignment: isUser ? CrossAxisAlignment.start : CrossAxisAlignment.end,
             children: [
               if (!isUser)
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 5, right: 5),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 5, right: 5),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(Icons.auto_awesome, color: NexusPalette.primaryLight, size: 12),
-                    SizedBox(width: 5),
-                    Text('NEXUS', style: TextStyle(color: NexusPalette.subtle, fontSize: 8, letterSpacing: 1.4, fontWeight: FontWeight.w900)),
+                    AgentAvatar(agent: AgentProfile.defaults.first, size: 22),
+                    SizedBox(width: 6),
+                    Text('المدير الرئيسي', style: TextStyle(color: NexusPalette.subtle, fontSize: 9, fontWeight: FontWeight.w800)),
                   ]),
                 ),
               if (isUser)

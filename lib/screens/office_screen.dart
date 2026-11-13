@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../core/nexus_theme.dart';
 import '../models/domain.dart';
+import '../widgets/agent_avatar.dart';
 import '../widgets/virtual_office_3d.dart';
 
 class OfficeScreen extends StatefulWidget {
@@ -14,8 +15,7 @@ class OfficeScreen extends StatefulWidget {
 
 class _OfficeScreenState extends State<OfficeScreen> {
   String _selectedAgent = 'manager';
-  bool _autoOrbit = true;
-  int _cameraResetKey = 0;
+
 
   AgentProfile get _agent => AgentProfile.defaults.firstWhere(
         (agent) => agent.id == _selectedAgent,
@@ -48,17 +48,11 @@ class _OfficeScreenState extends State<OfficeScreen> {
           padding: const EdgeInsets.fromLTRB(3, 2, 3, 10),
           child: Row(children: [
             const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('NEURAL COMMAND CENTER', style: TextStyle(color: NexusPalette.primary, fontSize: 8, fontWeight: FontWeight.w900, letterSpacing: 1.5)),
+              Text('DIGITAL HEADQUARTERS', style: TextStyle(color: NexusPalette.primary, fontSize: 8, fontWeight: FontWeight.w900, letterSpacing: 1.5)),
               SizedBox(height: 4),
-              Text('عالم الوكلاء ثلاثي الأبعاد', style: TextStyle(color: NexusPalette.text, fontSize: 15, fontWeight: FontWeight.w900)),
+              Text('المقر الرقمي', style: TextStyle(color: NexusPalette.text, fontSize: 15, fontWeight: FontWeight.w900)),
             ])),
-            _WorldControl(
-              icon: _autoOrbit ? Icons.pause_rounded : Icons.play_arrow_rounded,
-              label: _autoOrbit ? 'تدوير' : 'ثابت',
-              onTap: () => setState(() => _autoOrbit = !_autoOrbit),
-            ),
-            const SizedBox(width: 6),
-            _WorldControl(icon: Icons.center_focus_strong_rounded, label: 'إعادة', onTap: () => setState(() => _cameraResetKey++)),
+
           ]),
         ),
         SizedBox(
@@ -72,15 +66,9 @@ class _OfficeScreenState extends State<OfficeScreen> {
               borderRadius: BorderRadius.circular(23),
               child: Stack(fit: StackFit.expand, children: [
                 VirtualOffice3D(
-                  key: ValueKey(_cameraResetKey),
                   onAgentTap: _selectAgent,
                   selectedAgentId: _selectedAgent,
-                  autoOrbit: _autoOrbit,
-                ),
-                Positioned(
-                  top: 12,
-                  left: 12,
-                  child: _HudTag(label: 'AETHERIUM / 3D', color: NexusPalette.primary),
+                  autoOrbit: true,
                 ),
                 const Positioned(
                   bottom: 10,
@@ -113,17 +101,7 @@ class _OfficeScreenState extends State<OfficeScreen> {
           radius: 19,
           borderColor: selectedColor.withValues(alpha: 0.32),
           child: Row(children: [
-            Container(
-              width: 43,
-              height: 43,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: selectedColor.withValues(alpha: 0.12),
-                border: Border.all(color: selectedColor.withValues(alpha: 0.46)),
-                boxShadow: [BoxShadow(color: selectedColor.withValues(alpha: 0.15), blurRadius: 17)],
-              ),
-              child: Center(child: Text(_agent.glyph, style: TextStyle(color: selectedColor, fontSize: 21, fontWeight: FontWeight.w900))),
-            ),
+            AgentAvatar(agent: _agent, size: 46),
             const SizedBox(width: 11),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(_agent.name, style: TextStyle(color: selectedColor, fontSize: 12, fontWeight: FontWeight.w900)),
@@ -146,41 +124,6 @@ class _OfficeScreenState extends State<OfficeScreen> {
       ],
     );
   }
-}
-
-class _WorldControl extends StatelessWidget {
-  const _WorldControl({required this.icon, required this.label, required this.onTap});
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) => Material(
-        color: const Color(0xB30A0F1C),
-        borderRadius: BorderRadius.circular(12),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap: onTap,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
-            decoration: BoxDecoration(borderRadius: BorderRadius.circular(12), border: Border.all(color: NexusPalette.border)),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, color: NexusPalette.primary, size: 14), const SizedBox(width: 4), Text(label, style: const TextStyle(color: NexusPalette.text, fontSize: 9, fontWeight: FontWeight.w800))],),
-          ),
-        ),
-      );
-}
-
-class _HudTag extends StatelessWidget {
-  const _HudTag({required this.label, required this.color});
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-        decoration: BoxDecoration(color: const Color(0xCC050811), borderRadius: BorderRadius.circular(8), border: Border.all(color: color.withValues(alpha: 0.4))),
-        child: Text(label, style: TextStyle(color: color, fontSize: 8, fontWeight: FontWeight.w900, letterSpacing: 0.8)),
-      );
 }
 
 class _AgentSelector extends StatelessWidget {

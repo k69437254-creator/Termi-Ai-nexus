@@ -2,7 +2,7 @@ import 'dart:ui' as ui;
 
 import 'package:material_ui/material_ui.dart';
 
-/// AETHERIUM visual tokens. The names are kept compatible with the existing
+/// TermiAI Nexus visual tokens. The names are kept compatible with the existing
 /// screens so this redesign does not require changing their business logic.
 abstract final class NexusPalette {
   static const background = Color(0xFF050811);
@@ -280,7 +280,7 @@ class NexusPageHeader extends StatelessWidget {
     super.key,
     required this.title,
     required this.subtitle,
-    this.kicker = 'AETHERIUM 3D  /  NEXUS CORE',
+    this.kicker = 'TERMIAI NEXUS  /  CORE',
     this.trailing,
     this.padding = const EdgeInsets.fromLTRB(18, 18, 18, 14),
   });

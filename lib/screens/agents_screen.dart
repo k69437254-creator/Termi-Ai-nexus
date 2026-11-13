@@ -4,6 +4,7 @@ import '../core/ai_gateway.dart';
 import '../core/memory_store.dart';
 import '../core/nexus_theme.dart';
 import '../models/domain.dart';
+import '../widgets/agent_avatar.dart';
 
 class AgentsScreen extends StatefulWidget {
   const AgentsScreen({super.key});
@@ -60,17 +61,7 @@ class _AgentsScreenState extends State<AgentsScreen> {
                         radius: 21,
                         blur: 8,
                         child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                          Container(
-                            width: 47,
-                            height: 47,
-                            alignment: Alignment.center,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              gradient: const LinearGradient(colors: [Color(0xFF34234F), Color(0xFF201A31)]),
-                              border: Border.all(color: NexusPalette.primary.withValues(alpha: 0.42)),
-                            ),
-                            child: Text(agent.glyph, style: const TextStyle(color: NexusPalette.primaryLight, fontSize: 22, fontWeight: FontWeight.w800)),
-                          ),
+                          AgentAvatar(agent: agent, size: 52),
                           const SizedBox(width: 12),
                           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                             Text(agent.name, style: const TextStyle(color: NexusPalette.text, fontWeight: FontWeight.w900, fontSize: 13)),
@@ -169,18 +160,12 @@ class _AgentChatSheetState extends State<_AgentChatSheet> {
             Padding(
               padding: const EdgeInsets.fromLTRB(17, 7, 17, 13),
               child: Row(children: [
-                Container(
-                  width: 42,
-                  height: 42,
-                  decoration: BoxDecoration(shape: BoxShape.circle, color: NexusPalette.primary.withValues(alpha: 0.15), border: Border.all(color: NexusPalette.primary.withValues(alpha: 0.35))),
-                  alignment: Alignment.center,
-                  child: Text(widget.agent.glyph, style: const TextStyle(color: NexusPalette.primaryLight, fontSize: 20)),
-                ),
+                AgentAvatar(agent: widget.agent, size: 48),
                 const SizedBox(width: 10),
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text(widget.agent.name, style: const TextStyle(color: NexusPalette.text, fontWeight: FontWeight.w900, fontSize: 14)),
                   const SizedBox(height: 3),
-                  const Text('محادثة مباشرة • مهام الفريق تستمر بالتوازي', style: TextStyle(color: NexusPalette.muted, fontSize: 9)),
+                  Text(widget.agent.description, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: NexusPalette.muted, fontSize: 9)),
                 ])),
                 IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close_rounded)),
               ]),
@@ -189,7 +174,7 @@ class _AgentChatSheetState extends State<_AgentChatSheet> {
             Expanded(
               child: _messages.isEmpty
                   ? Center(child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
-                      const NexusIconTile(Icons.forum_outlined, size: 50),
+                      AgentAvatar(agent: widget.agent, size: 74),
                       const SizedBox(height: 12),
                       const Text('ابدأ محادثة مع هذا الوكيل', style: TextStyle(color: NexusPalette.text, fontWeight: FontWeight.w800)),
                       const SizedBox(height: 5),
@@ -202,19 +187,32 @@ class _AgentChatSheetState extends State<_AgentChatSheet> {
                       itemBuilder: (context, index) {
                         final message = _messages[index];
                         final user = message['role'] == 'user';
+                        final bubble = Container(
+                          margin: const EdgeInsets.only(bottom: 9),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                          constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * (user ? 0.82 : 0.72)),
+                          decoration: BoxDecoration(
+                            gradient: user ? const LinearGradient(colors: [Color(0xFF7650D8), Color(0xFF5530A9)]) : null,
+                            color: user ? null : NexusPalette.card,
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(color: user ? NexusPalette.primaryLight.withValues(alpha: 0.22) : NexusPalette.border),
+                          ),
+                          child: Text(message['content'] ?? '', style: TextStyle(color: user ? Colors.white : NexusPalette.text, fontSize: 11, height: 1.5)),
+                        );
+                        if (user) {
+                          return Align(alignment: AlignmentDirectional.centerStart, child: bubble);
+                        }
                         return Align(
-                          alignment: user ? AlignmentDirectional.centerStart : AlignmentDirectional.centerEnd,
-                          child: Container(
-                            margin: const EdgeInsets.only(bottom: 9),
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-                            constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.82),
-                            decoration: BoxDecoration(
-                              gradient: user ? const LinearGradient(colors: [Color(0xFF7650D8), Color(0xFF5530A9)]) : null,
-                              color: user ? null : NexusPalette.card,
-                              borderRadius: BorderRadius.circular(18),
-                              border: Border.all(color: user ? NexusPalette.primaryLight.withValues(alpha: 0.22) : NexusPalette.border),
-                            ),
-                            child: Text(message['content'] ?? '', style: TextStyle(color: user ? Colors.white : NexusPalette.text, fontSize: 11, height: 1.5)),
+                          alignment: AlignmentDirectional.centerEnd,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            textDirection: TextDirection.ltr,
+                            children: [
+                              AgentAvatar(agent: widget.agent, size: 28),
+                              const SizedBox(width: 7),
+                              bubble,
+                            ],
                           ),
                         );
                       },

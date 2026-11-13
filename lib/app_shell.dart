@@ -39,7 +39,7 @@ class _AppShellState extends State<AppShell> {
   void _openAssistant() => setState(() => _selected = 1);
 
   String get _title => const [
-        'مقر الوكلاء',
+        'المقر الرقمي',
         'المساعد الذكي',
         'مركز المشاريع',
         'مركز التحكم',
@@ -76,11 +76,9 @@ class _AppShellState extends State<AppShell> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Row(children: [
-                      const Text('AETHERIUM', style: TextStyle(color: NexusPalette.text, fontSize: 14, fontWeight: FontWeight.w900, letterSpacing: 1.1)),
-                      const SizedBox(width: 5),
-                      const Text('3D', style: TextStyle(color: NexusPalette.primary, fontSize: 14, fontWeight: FontWeight.w900)),
+                      const Text('TERMIAI NEXUS', style: TextStyle(color: NexusPalette.text, fontSize: 13, fontWeight: FontWeight.w900, letterSpacing: 0.9)),
                       const SizedBox(width: 8),
-                      const Text('NEURAL COMMAND', style: TextStyle(color: NexusPalette.muted, fontSize: 8, fontWeight: FontWeight.w800, letterSpacing: 1.0)),
+                      const Text('WORKSPACE', style: TextStyle(color: NexusPalette.muted, fontSize: 8, fontWeight: FontWeight.w800, letterSpacing: 1.0)),
                     ]),
                     const SizedBox(height: 3),
                     Text(_title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: NexusPalette.muted, fontSize: 10, fontWeight: FontWeight.w700)),
@@ -144,7 +142,7 @@ class _AppShellState extends State<AppShell> {
             tint: const Color(0xE6060A14),
             borderColor: const Color(0x30FFFFFF),
             child: Row(children: [
-              _DockItem(icon: Icons.hub_outlined, selectedIcon: Icons.hub_rounded, label: 'العالم 3D', selected: _selected == 0, onTap: () => setState(() => _selected = 0)),
+              _DockItem(icon: Icons.hub_outlined, selectedIcon: Icons.hub_rounded, label: 'المقر', selected: _selected == 0, onTap: () => setState(() => _selected = 0)),
               _DockItem(icon: Icons.auto_awesome_outlined, selectedIcon: Icons.auto_awesome, label: 'المساعد', selected: _selected == 1, onTap: _openAssistant),
               _DockItem(icon: Icons.folder_open_outlined, selectedIcon: Icons.folder_rounded, label: 'المشاريع', selected: _selected == 2, onTap: () => setState(() => _selected = 2)),
               _DockItem(icon: Icons.space_dashboard_outlined, selectedIcon: Icons.space_dashboard_rounded, label: 'التحكم', selected: _selected == 3, onTap: () => setState(() => _selected = 3)),
@@ -166,7 +164,7 @@ class _AppShellState extends State<AppShell> {
               padding: const EdgeInsets.all(16),
               radius: 21,
               child: const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [NexusIconTile(Icons.hub_rounded, size: 42), SizedBox(width: 11), Expanded(child: Text('AETHERIUM 3D', style: TextStyle(fontSize: 15, letterSpacing: 1.1, fontWeight: FontWeight.w900, color: NexusPalette.text)))]),
+                Row(children: [NexusIconTile(Icons.hub_rounded, size: 42), SizedBox(width: 11), Expanded(child: Text('TERMIAI NEXUS', style: TextStyle(fontSize: 14, letterSpacing: 0.8, fontWeight: FontWeight.w900, color: NexusPalette.text)))]),
                 SizedBox(height: 12),
                 Text('مركز قيادة موحّد للوكلاء والمشاريع والمحرك.', style: TextStyle(color: NexusPalette.muted, fontSize: 10, height: 1.55)),
                 SizedBox(height: 10),
@@ -175,7 +173,7 @@ class _AppShellState extends State<AppShell> {
             ),
           ),
           const Padding(padding: EdgeInsetsDirectional.fromSTEB(25, 0, 25, 8), child: Text('WORKSPACE', style: TextStyle(color: NexusPalette.subtle, fontSize: 9, letterSpacing: 1.6, fontWeight: FontWeight.w900))),
-          const NavigationDrawerDestination(icon: Icon(Icons.hub_outlined), selectedIcon: Icon(Icons.hub_rounded), label: Text('مقر الوكلاء')),
+          const NavigationDrawerDestination(icon: Icon(Icons.hub_outlined), selectedIcon: Icon(Icons.hub_rounded), label: Text('المقر الرقمي')),
           const NavigationDrawerDestination(icon: Icon(Icons.auto_awesome_outlined), selectedIcon: Icon(Icons.auto_awesome), label: Text('المساعد الذكي')),
           const NavigationDrawerDestination(icon: Icon(Icons.folder_open_outlined), selectedIcon: Icon(Icons.folder_rounded), label: Text('مركز المشاريع')),
           const NavigationDrawerDestination(icon: Icon(Icons.space_dashboard_outlined), selectedIcon: Icon(Icons.space_dashboard_rounded), label: Text('مركز التحكم')),
