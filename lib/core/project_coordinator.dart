@@ -1,33 +1,24 @@
-import 'dart:convert';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../models/domain.dart';
 import 'ai_gateway.dart';
 import 'memory_store.dart';
+import 'project_job_store.dart';
 import 'project_workspace.dart';
 
 class ProjectCoordinator {
-  ProjectCoordinator({AiGateway? gateway, MemoryStore? memory})
-      : gateway = gateway ?? AiGateway(), memory = memory ?? MemoryStore();
+  ProjectCoordinator({AiGateway? gateway, MemoryStore? memory, ProjectJobStore? jobStore})
+      : gateway = gateway ?? AiGateway(),
+        memory = memory ?? MemoryStore(),
+        jobStore = jobStore ?? ProjectJobStore();
   final AiGateway gateway;
   final MemoryStore memory;
-  static const _projectsKey = 'projects.v1';
+  final ProjectJobStore jobStore;
 
-  Future<List<ProjectRecord>> listProjects() async {
-    final prefs = SharedPreferencesAsync();
-    final raw = await prefs.getString(_projectsKey);
-    if (raw == null) return [];
-    try {
-      return (jsonDecode(raw) as List).whereType<Map>().map((e) => ProjectRecord.fromJson(Map<String, dynamic>.from(e))).toList();
-    } catch (_) { return []; }
-  }
+  Future<List<ProjectRecord>> listProjects() => jobStore.loadProjects();
 
-  Future<void> _saveProjects(List<ProjectRecord> records) async {
-    final prefs = SharedPreferencesAsync();
-    await prefs.setString(_projectsKey, jsonEncode(records.map((e) => e.toJson()).toList()));
-  }
+  Future<void> _saveProjects(List<ProjectRecord> records) => jobStore.saveProjects(records);
 
   Future<ProjectRecord> prepare(String request) async {
     final id = const Uuid().v4();
@@ -53,6 +44,7 @@ class ProjectCoordinator {
     await workspace.initialize();
     for (final task in project.tasks) {
       task.status = TaskStatus.running;
+      await save(project);
       onTaskChanged?.call(task);
       var success = false;
       var rollbackFailed = false;
@@ -99,6 +91,7 @@ class ProjectCoordinator {
               'لم تُشغّل اختبارات بناء أو تشغيل على الجهاز.';
           task.status = TaskStatus.completed;
           success = true;
+          await save(project);
           try {
             await memory.addAgent(task.agentId, 'نجحت المهمة ${task.title}. تغييرات الملفات: ${changedPaths.join(', ')}');
             if (attempt > 1 && lastError.isNotEmpty) {
@@ -142,6 +135,7 @@ class ProjectCoordinator {
             ? 'تعذر إثبات اكتمال التراجع الآمن؛ أوقف النظام المحاولات الإضافية.'
             : 'تم التراجع عن تغييرات المحاولة مع الحفاظ على التعديلات الخارجية المكتشفة.';
         task.result = 'تعذّر إكمال المهمة بعد $maxRepairAttempts محاولات. $rollbackMessage آخر خطأ: $lastError';
+        await save(project);
         onTaskChanged?.call(task);
         break;
       }
