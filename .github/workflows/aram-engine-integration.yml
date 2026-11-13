@@ -43,7 +43,7 @@ jobs:
       - name: Set up Flutter stable
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: '3.50.0'
           cache: true
 
       - name: Configure Flutter and Android SDK paths
@@ -56,6 +56,12 @@ jobs:
 
       - name: Prepare pinned Aram AI native engine
         run: bash scripts/prepare_aram_engine_ci.sh
+
+      - name: Analyze Dart code
+        run: flutter analyze
+
+      - name: Run Flutter tests
+        run: flutter test
 
       - name: Build TermiAI-Nexus debug APK
         run: flutter build apk --debug

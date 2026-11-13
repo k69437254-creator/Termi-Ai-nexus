@@ -145,7 +145,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                       child: Text(
                         _output.isEmpty ? 'TERMI AI NEXUS  /  PTY\nاضغط تشغيل لبدء جلسة طرفية تفاعلية.\n\nتنبيه: هذه طرفية Android وليست توزيعة Debian أو Ubuntu.\n' : _output.toString(),
                         textDirection: TextDirection.ltr,
-                        style: const TextStyle(fontFamily: 'monospace', color: NexusPalette.terminal, fontSize: 11.5, height: 1.52),
+                        style: TextStyle(fontFamily: 'JetBrainsMono', color: NexusPalette.terminal, fontSize: 11.5, height: 1.52),
                       ),
                     ),
                   ),

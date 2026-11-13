@@ -315,7 +315,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
   Widget _buildHeader() => Container(
         padding: const EdgeInsetsDirectional.fromSTEB(8, 8, 16, 12),
         decoration: const BoxDecoration(
-          color: Color(0xCC10111A),
+          color: Color(0xCC0A0F1C),
           border: Border(bottom: BorderSide(color: NexusPalette.border)),
         ),
         child: Row(
@@ -335,7 +335,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
                   end: Alignment.bottomRight,
                   colors: [NexusPalette.primaryLight, NexusPalette.primaryDeep],
                 ),
-                boxShadow: const [BoxShadow(color: Color(0x338B5CF6), blurRadius: 16)],
+                boxShadow: const [BoxShadow(color: Color(0x3300F0FF), blurRadius: 16)],
               ),
               child: const Icon(Icons.auto_awesome_rounded, color: Colors.white, size: 21),
             ),
@@ -358,7 +358,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
   Widget _buildComposer() => Container(
         padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
         decoration: const BoxDecoration(
-          color: Color(0xE610111A),
+          color: Color(0xE60A0F1C),
           border: Border(top: BorderSide(color: NexusPalette.border)),
         ),
         child: SafeArea(
@@ -396,7 +396,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
                   borderRadius: BorderRadius.circular(17),
                   boxShadow: (_planning || _executing)
                       ? const []
-                      : const [BoxShadow(color: Color(0x338B5CF6), blurRadius: 16, offset: Offset(0, 4))],
+                      : const [BoxShadow(color: Color(0x3300F0FF), blurRadius: 16, offset: Offset(0, 4))],
                 ),
                 child: IconButton(
                   tooltip: 'إرسال الرسالة',
@@ -462,10 +462,10 @@ class _MessageBubble extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   decoration: BoxDecoration(
-                    gradient: const LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [Color(0xFF7650D8), Color(0xFF5530A9)]),
+                    gradient: const LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [NexusPalette.purple, Color(0xFF6535A8)]),
                     borderRadius: const BorderRadiusDirectional.only(topStart: Radius.circular(20), topEnd: Radius.circular(20), bottomEnd: Radius.circular(5), bottomStart: Radius.circular(20)),
                     border: Border.all(color: NexusPalette.primaryLight.withValues(alpha: 0.25)),
-                    boxShadow: const [BoxShadow(color: Color(0x1F8B5CF6), blurRadius: 14, offset: Offset(0, 5))],
+                    boxShadow: const [BoxShadow(color: Color(0x1FA855F7), blurRadius: 14, offset: Offset(0, 5))],
                   ),
                   child: Text(message.text, style: const TextStyle(color: Colors.white, fontSize: 13, height: 1.5)),
                 )

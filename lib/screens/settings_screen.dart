@@ -142,7 +142,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text('Aram Aoyal', style: TextStyle(color: NexusPalette.text, fontWeight: FontWeight.w900, fontSize: 12)),
               SizedBox(height: 3),
-              Text('TermiAI-Nexus • Obsidian Interface', style: TextStyle(color: NexusPalette.muted, fontSize: 10)),
+              Text('TermiAI-Nexus • AETHERIUM 3D', style: TextStyle(color: NexusPalette.muted, fontSize: 10)),
               SizedBox(height: 3),
               Text('Telegram: https://t.me/ro_gy', textDirection: TextDirection.ltr, style: TextStyle(color: NexusPalette.primaryLight, fontSize: 10)),
             ])),
