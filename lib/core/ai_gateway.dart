@@ -108,6 +108,35 @@ class AiGateway {
     return uri.replace(path: '$normalized/chat/completions');
   }
 
+  Future<String> acquireProjectExecutionLease() async {
+    try {
+      final leaseId = await _embeddedEngine.invokeMethod<String>(
+        'acquireExecutionLease',
+      );
+      if (leaseId == null || leaseId.trim().isEmpty) {
+        throw AiGatewayException('لم يُرجع محرك Spark معرف حجز صالحاً.');
+      }
+      return leaseId;
+    } on PlatformException catch (error) {
+      throw AiGatewayException(
+        error.message ?? 'تعذر حجز محرك Spark (${error.code}).',
+      );
+    }
+  }
+
+  Future<void> releaseProjectExecutionLease(String leaseId) async {
+    try {
+      await _embeddedEngine.invokeMethod<bool>(
+        'releaseExecutionLease',
+        {'leaseId': leaseId},
+      );
+    } on PlatformException catch (error) {
+      throw AiGatewayException(
+        error.message ?? 'تعذر تحرير حجز محرك Spark (${error.code}).',
+      );
+    }
+  }
+
   Future<List<PlanTask>> createPlan(String request, String projectId, MemoryStore memory) async {
     final teamMemory = await memory.contextFor(agentId: 'manager', projectId: projectId);
     final result = await chat(

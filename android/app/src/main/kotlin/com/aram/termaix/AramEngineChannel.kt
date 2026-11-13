@@ -19,12 +19,15 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 object AramEngineChannel {
     private const val CHANNEL = "termai/aram-engine"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val main = Handler(Looper.getMainLooper())
     private const val IMPORT_REQUEST_CODE = 0x4152
+    private val executionLeases = ConcurrentHashMap<String, AutoCloseable>()
     @Volatile private var pendingImportResult: MethodChannel.Result? = null
     @Volatile private var pendingImportContext: android.content.Context? = null
 
@@ -68,6 +71,67 @@ object AramEngineChannel {
                         val importActivity = activity
                             ?: throw IllegalStateException("استيراد النموذج يتطلب فتح واجهة التطبيق")
                         importActivity.startActivityForResult(picker, IMPORT_REQUEST_CODE)
+                    }
+                    "acquireExecutionLease" -> {
+                        scope.launch {
+                            try {
+                                if (!ModelRuntime.isLoaded()) {
+                                    if (!runCatching { ModelFiles.isModelReady(context) }.getOrDefault(false)) {
+                                        throw IllegalStateException(
+                                            "نموذج Spark-X2.6-1.7B غير مثبت أو غير جاهز."
+                                        )
+                                    }
+                                    context.startForegroundService(
+                                        Intent(context, AramEngineService::class.java)
+                                            .setAction(AramEngineService.ACTION_START)
+                                    )
+                                }
+
+                                var attempts = 0
+                                while (!ModelRuntime.isLoaded() && attempts < 900) {
+                                    val status = AppPrefs.engineStatus(context)
+                                    if (status.state == "ERROR") {
+                                        throw IllegalStateException(status.message)
+                                    }
+                                    delay(500)
+                                    attempts++
+                                }
+                                if (!ModelRuntime.isLoaded()) {
+                                    throw IllegalStateException(
+                                        "لم يصبح محرك Spark جاهزاً خلال المهلة المحددة."
+                                    )
+                                }
+
+                                val lease = ModelOperationLock.mutex.withLock {
+                                    ModelRuntime.acquireExecutionLease()
+                                }
+                                val leaseId = UUID.randomUUID().toString()
+                                executionLeases[leaseId] = lease
+                                main.post { result.success(leaseId) }
+                            } catch (error: Throwable) {
+                                main.post {
+                                    result.error(
+                                        "SPARK_LEASE_ACQUIRE_FAILED",
+                                        error.message ?: error.javaClass.simpleName,
+                                        null
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    "releaseExecutionLease" -> {
+                        val leaseId = call.argument<String>("leaseId")
+                            ?: throw IllegalArgumentException("معرف حجز محرك Spark مفقود")
+                        scope.launch {
+                            val lease = executionLeases.remove(leaseId)
+                            if (lease == null) {
+                                main.post { result.success(false) }
+                            } else {
+                                lease.close()
+                                AramEngineService.onExecutionLeaseReleased()
+                                main.post { result.success(true) }
+                            }
+                        }
                     }
                     "stop" -> {
                         context.startService(Intent(context, AramEngineService::class.java).setAction(AramEngineService.ACTION_STOP))

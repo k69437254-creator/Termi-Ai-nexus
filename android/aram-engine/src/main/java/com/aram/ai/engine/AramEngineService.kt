@@ -30,6 +30,12 @@ class AramEngineService : Service() {
     @Volatile private var server: com.aram.ai.server.ApiHttpServer? = null
     @Volatile private var starting = false
     private var wakeLock: PowerManager.WakeLock? = null
+    @Volatile private var deferredStopRequested = false
+
+    override fun onCreate() {
+        super.onCreate()
+        activeService = this
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -218,9 +224,11 @@ class AramEngineService : Service() {
         scope.launch {
             lifecycleMutex.withLock {
                 if (ModelRuntime.activeExecutionLeaseCount() > 0) {
+                    deferredStopRequested = true
                     updateNotification("هناك مشروع قيد التنفيذ؛ تم تأجيل إيقاف محرك Spark")
                     return@withLock
                 }
+                deferredStopRequested = false
                 AppPrefs.setEngineState(
                     this@AramEngineService,
                     "STOPPING",
@@ -241,6 +249,12 @@ class AramEngineService : Service() {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
+        }
+    }
+
+    private fun resumeDeferredStopIfReady() {
+        if (deferredStopRequested && ModelRuntime.activeExecutionLeaseCount() == 0) {
+            stopEngine()
         }
     }
 
@@ -315,6 +329,7 @@ class AramEngineService : Service() {
     }
 
     override fun onDestroy() {
+        if (activeService === this) activeService = null
         runCatching { server?.stop() }
         server = null
         releaseWakeLock()
@@ -327,6 +342,12 @@ class AramEngineService : Service() {
     }
 
     companion object {
+        @Volatile private var activeService: AramEngineService? = null
+
+        fun onExecutionLeaseReleased() {
+            activeService?.resumeDeferredStopIfReady()
+        }
+
         const val ACTION_START = "com.aram.termaix.aram.START"
         const val ACTION_DOWNLOAD_MODEL = "com.aram.termaix.aram.DOWNLOAD_MODEL"
         const val ACTION_STOP = "com.aram.termaix.aram.STOP"
