@@ -196,7 +196,7 @@ class _EngineCenterScreenState extends State<EngineCenterScreen> {
               child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                 FilledButton.icon(onPressed: _busy || _isReady || _isImporting ? null : () => _runAction('start'), icon: const Icon(Icons.play_arrow_rounded), label: const Text('تشغيل المحرك')),
                 const SizedBox(height: 9),
-                OutlinedButton.icon(onPressed: _busy || (_state == 'STOPPED' && !_loaded) ? null : () => _runAction('stop', successMessage: 'تم إرسال طلب إيقاف المحرك'), icon: const Icon(Icons.stop_rounded), label: const Text('إيقاف المحرك')),
+                OutlinedButton.icon(onPressed: _busy || (_state == 'STOPPED' && !_loaded) ? null : () => _runAction('stop'), icon: const Icon(Icons.stop_rounded), label: const Text('إيقاف المحرك')),
               ]),
             ),
             _sectionCard(
