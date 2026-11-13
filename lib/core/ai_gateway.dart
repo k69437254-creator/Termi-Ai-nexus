@@ -21,13 +21,13 @@ class AiGateway {
   Future<String> get baseUrl => _vault.read('ai.base_url');
   Future<String> get model => _vault.read('ai.model');
 
-  Future<String> chat({required String system, required String user, String? agentId, double temperature = 0.2}) async {
+  Future<String> chat({required String system, required String user, String? agentId, double temperature = 0.2, bool localEngineOnly = false}) async {
     final endpoint = (await baseUrl).trim();
     final selectedModel = (await model).trim();
 
     // Use the in-process Android engine for blank/loopback endpoints. This avoids
     // the previously observed localhost HTTP stall between TermiAI and Aram AI.
-    if (_shouldUseEmbeddedEngine(endpoint)) {
+    if (localEngineOnly || _shouldUseEmbeddedEngine(endpoint)) {
       try {
         final answer = await _embeddedEngine.invokeMethod<String>('generate', {
           'system': system,
@@ -112,6 +112,7 @@ class AiGateway {
     final teamMemory = await memory.contextFor(agentId: 'manager', projectId: projectId);
     final result = await chat(
       agentId: 'manager', temperature: 0.15,
+      localEngineOnly: true,
       system: 'أنت المدير الرئيسي في TermiAI-Nexus. حلل طلب تطوير برمجي وحوله إلى خطة عملية متسلسلة. أعد JSON فقط بالشكل {"tasks":[{"id":"t1","title":"...","description":"...","agentId":"architect|developer|qa|security","risk":"low|medium|high"}]}. لا تدّع تنفيذ أي شيء. لا تضع أوامر خطرة. استخدم 3 إلى 8 مهام. السياق:\n$teamMemory',
       user: request,
     );
@@ -156,6 +157,7 @@ class AiGateway {
     final context = await memory.contextFor(agentId: agentId, projectId: projectId);
     return chat(
       agentId: agentId,
+      localEngineOnly: true,
       system: 'أنت وكيل متخصص في فريق TermiAI-Nexus. أخرج JSON فقط بالشكل {"summary":"...","files":[{"path":"relative/path","content":"full file content"}],"verification":["..."],"risks":[]}. الملفات نصوص كاملة وليست diff. لا تستخدم مسارات مطلقة ولا .. ولا تنفذ أوامر. يجب أن تتضمن files ملفاً واحداً على الأقل بتغيير فعلي؛ لا تُعد مصفوفة فارغة أو محتوى مطابقاً لملف قائم. إذا تعذر إجراء تغيير فعلي، اشرح العائق في summary ولا تدّع النجاح. لا تختلق نتائج اختبار. السياق:\n$context',
       user: 'المهمة: $taskTitle\nالتفاصيل: $taskDescription\nأنت تعمل داخل مساحة مشروع معزولة. قدّم ملفات كاملة صغيرة ومتماسكة فقط عند الحاجة.\n\n$workspaceContext',
       temperature: 0.15,
