@@ -1,21 +1,32 @@
-name: TermiAI-Nexus with embedded Aram AI
+name: TermiAI-Nexus Android CI and APK
 
 on:
   push:
-    branches: [integration/aram-ai-engine]
+    branches:
+      - integration/aram-ai-engine
   pull_request:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: termiai-android-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   android-apk:
+    name: Analyze, test and build installable APK
     runs-on: ubuntu-latest
+    timeout-minutes: 90
+
     steps:
-      - name: Checkout TermiAI-Nexus
+      - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          submodules: false
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -25,58 +36,75 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-        with:
-          packages: platform-tools
 
-      - name: Install Android native toolchains
+      - name: Install exact Android native toolchains
         shell: bash
         run: |
+          set -Eeuo pipefail
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager --install \
             "platforms;android-36" \
             "build-tools;36.0.0" \
             "ndk;28.2.13676358" \
-            "ndk;29.0.13113456" \
-            "cmake;3.22.1" \
-            "cmake;3.31.6"
+            "cmake;3.22.1"
+          test -d "$ANDROID_SDK_ROOT/ndk/28.2.13676358"
+          test -d "$ANDROID_SDK_ROOT/cmake/3.22.1"
 
-      - name: Set up Flutter stable
+      - name: Set up Flutter and Dart
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.50.0'
+          channel: stable
           cache: true
 
       - name: Configure Flutter and Android SDK paths
         shell: bash
         run: |
-          FLUTTER_ROOT="$(dirname "$(dirname "$(readlink -f "$(command -v flutter)")")")"
+          set -Eeuo pipefail
+          FLUTTER_BIN="$(command -v flutter)"
+          FLUTTER_ROOT="$(dirname "$(dirname "$(readlink -f "$FLUTTER_BIN")")")"
+          test -d "$FLUTTER_ROOT/packages/flutter_tools/gradle"
+          test -d "$ANDROID_SDK_ROOT"
           printf 'flutter.sdk=%s\nsdk.dir=%s\n' "$FLUTTER_ROOT" "$ANDROID_SDK_ROOT" > android/local.properties
           flutter --version
-          flutter pub get
+          dart --version
+          java -version
 
       - name: Prepare pinned Aram AI native engine
-        run: bash scripts/prepare_aram_engine_ci.sh
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash scripts/prepare_aram_engine_ci.sh
+
+      - name: Resolve Flutter dependencies
+        run: flutter pub get
 
       - name: Analyze Dart code
         run: flutter analyze
 
       - name: Run Flutter tests
-        run: flutter test
+        run: flutter test --reporter expanded
 
-      - name: Build TermiAI-Nexus debug APK
-        run: flutter build apk --debug
+      - name: Build release APK
+        run: flutter build apk --release --verbose
 
-      - name: Collect APK
+      - name: Verify APK and signature
         shell: bash
         run: |
-          APK="$(find .. -type f -path '*/outputs/flutter-apk/app-debug.apk' -print -quit)"
-          test -n "$APK"
-          cp "$APK" "$GITHUB_WORKSPACE/TermiAI-Nexus-AramAI-debug.apk"
+          set -Eeuo pipefail
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+          test -s "$APK"
+          APKSIGNER="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -n "$APKSIGNER"
+          test -x "$APKSIGNER"
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
+          sha256sum "$APK"
+          ls -lh "$APK"
 
-      - name: Upload APK
+      - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: TermiAI-Nexus-AramAI-debug-APK
-          path: TermiAI-Nexus-AramAI-debug.apk
+          name: TermiAI-Nexus-AramAI-release-${{ github.run_number }}
+          path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
