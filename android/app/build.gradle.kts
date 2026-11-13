@@ -24,6 +24,14 @@ android {
     externalNativeBuild {
         cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" }
     }
+    // TERMIAI_NATIVE_BACKEND_EXTRACTION_V1
+    // llama.cpp scans nativeLibraryDir for dynamically loaded CPU backends.
+    // Extract packaged .so files so that this directory scan can find them.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
     buildTypes {
         release {
             // Sign CI release APKs so Android can install them.
