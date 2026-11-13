@@ -32,8 +32,7 @@ class AramModelDownloadReceiver : BroadcastReceiver() {
 
         if (finalized) {
             AppPrefs.setDownloadId(context, -1L)
-            AppPrefs.setEngineState(context, "STOPPED", "اكتمل تنزيل النموذج والتحقق من ملف GGUF؛ يجري تشغيل المحرك")
-            context.startForegroundService(Intent(context, AramEngineService::class.java).setAction(AramEngineService.ACTION_START))
+            AppPrefs.setEngineState(context, "STOPPED", "اكتمل تنزيل النموذج والتحقق من ملف GGUF؛ افتح مركز المحرك لبدء تشغيله")
         } else {
             AppPrefs.setDownloadId(context, -1L)
             val detail = if (successful) "اكتمل التنزيل لكن تعذر اعتماد ملف GGUF؛ افحص مساحة التخزين أو استورد الملف يدويًا" else reason

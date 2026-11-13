@@ -105,7 +105,11 @@ object ModelFiles {
         return false
     }
 
-    fun importModel(context: Context, uri: Uri): Boolean {
+    fun importModel(
+        context: Context,
+        uri: Uri,
+        onProgress: (String, Long, Long) -> Unit = { _, _, _ -> }
+    ): Boolean {
         val destination = modelFile(context)
         val directory = destination.parentFile
             ?: throw IllegalStateException("مجلد النموذج غير صالح")
@@ -132,6 +136,7 @@ object ModelFiles {
         if (declaredSize > MAX_MODEL_BYTES) {
             throw IllegalArgumentException("حجم ملف النموذج يتجاوز الحد الأقصى المسموح")
         }
+        onProgress("COPYING", 0L, declaredSize)
         val requiredSpace = if (declaredSize > 0L) declaredSize else MIN_MODEL_BYTES
         if (directory.usableSpace < requiredSpace + MIN_FREE_SPACE_MARGIN) {
             throw IllegalStateException("مساحة التخزين غير كافية لنسخ ملف النموذج كاملًا")
@@ -145,10 +150,12 @@ object ModelFiles {
                 FileOutputStream(temporary).use { output ->
                     val buffer = ByteArray(1024 * 1024)
                     var total = 0L
+                    var lastProgressAt = 0L
 
                     while (true) {
                         val count = input.read(buffer)
                         if (count < 0) break
+                        if (count == 0) continue
 
                         total += count
                         if (total > MAX_MODEL_BYTES) {
@@ -156,13 +163,20 @@ object ModelFiles {
                         }
 
                         output.write(buffer, 0, count)
+                        val now = System.nanoTime()
+                        if (now - lastProgressAt >= 250_000_000L) {
+                            onProgress("COPYING", total, declaredSize)
+                            lastProgressAt = now
+                        }
                     }
 
+                    onProgress("COPYING", total, declaredSize)
                     output.flush()
                     output.fd.sync()
                 }
             }
 
+            onProgress("VERIFYING", temporary.length(), declaredSize)
             if (declaredSize > 0L && temporary.length() != declaredSize) {
                 throw IllegalArgumentException("حجم الملف المنسوخ لا يطابق حجم الملف الأصلي؛ أُوقف الاستيراد لحماية النموذج")
             }
@@ -177,10 +191,49 @@ object ModelFiles {
                 throw IllegalStateException("تعذر اعتماد النموذج مع الحفاظ على النسخة السابقة")
             }
 
+            onProgress("COMPLETE", destination.length(), declaredSize)
             return true
         } catch (error: Throwable) {
             temporary.delete()
             throw error
+        }
+    }
+
+    fun downloadProgress(context: Context): Map<String, Any> {
+        val id = AppPrefs.downloadId(context)
+        if (id < 0L) return emptyMap()
+        val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val cursor = runCatching { manager.query(DownloadManager.Query().setFilterById(id)) }.getOrNull()
+            ?: return mapOf(
+                "transferOperation" to "DOWNLOAD",
+                "transferStage" to "CONNECTING",
+                "transferBytes" to 0L,
+                "transferTotalBytes" to -1L,
+                "transferPaused" to false
+            )
+        cursor.use {
+            if (!it.moveToFirst()) return emptyMap()
+            val downloaded = it.getLong(it.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+            val total = it.getLong(it.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+            val status = it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+            val reason = it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
+            val stage = when (status) {
+                DownloadManager.STATUS_PENDING -> "PENDING"
+                DownloadManager.STATUS_RUNNING -> "RUNNING"
+                DownloadManager.STATUS_PAUSED -> "PAUSED"
+                DownloadManager.STATUS_SUCCESSFUL -> "VERIFYING"
+                DownloadManager.STATUS_FAILED -> "FAILED"
+                else -> "UNKNOWN"
+            }
+            return mapOf(
+                "transferOperation" to "DOWNLOAD",
+                "transferStage" to stage,
+                "transferBytes" to downloaded.coerceAtLeast(0L),
+                "transferTotalBytes" to total,
+                "transferPaused" to (status == DownloadManager.STATUS_PAUSED),
+                "transferStatus" to stage,
+                "transferReason" to reason
+            )
         }
     }
 
@@ -214,7 +267,7 @@ object ModelFiles {
             .setNotificationVisibility(
                 DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
             )
-            .setAllowedOverMetered(false)
+            .setAllowedOverMetered(true)
             .setAllowedOverRoaming(false)
             .setDestinationInExternalFilesDir(
                 context,

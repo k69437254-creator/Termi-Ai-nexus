@@ -21,6 +21,10 @@ object AppPrefs {
     private const val KEY_STARTED = "engine_started_at"
     private const val KEY_LAN = "allow_lan"
     private const val KEY_DOWNLOAD_ID = "model_download_id"
+    private const val KEY_TRANSFER_OPERATION = "model_transfer_operation"
+    private const val KEY_TRANSFER_STAGE = "model_transfer_stage"
+    private const val KEY_TRANSFER_BYTES = "model_transfer_bytes"
+    private const val KEY_TRANSFER_TOTAL = "model_transfer_total"
 
     private fun prefs(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -61,4 +65,35 @@ object AppPrefs {
     fun setAllowLan(context: Context, value: Boolean) { prefs(context).edit().putBoolean(KEY_LAN, value).apply() }
     fun downloadId(context: Context): Long = prefs(context).getLong(KEY_DOWNLOAD_ID, -1L)
     fun setDownloadId(context: Context, id: Long) { prefs(context).edit().putLong(KEY_DOWNLOAD_ID, id).apply() }
+
+    fun setTransferProgress(context: Context, operation: String, stage: String, bytes: Long, total: Long) {
+        prefs(context).edit()
+            .putString(KEY_TRANSFER_OPERATION, operation)
+            .putString(KEY_TRANSFER_STAGE, stage)
+            .putLong(KEY_TRANSFER_BYTES, bytes.coerceAtLeast(0L))
+            .putLong(KEY_TRANSFER_TOTAL, total)
+            .apply()
+    }
+
+    fun clearTransferProgress(context: Context) {
+        prefs(context).edit()
+            .remove(KEY_TRANSFER_OPERATION)
+            .remove(KEY_TRANSFER_STAGE)
+            .remove(KEY_TRANSFER_BYTES)
+            .remove(KEY_TRANSFER_TOTAL)
+            .apply()
+    }
+
+    fun transferProgress(context: Context): Map<String, Any> {
+        val p = prefs(context)
+        val operation = p.getString(KEY_TRANSFER_OPERATION, "").orEmpty()
+        if (operation.isBlank()) return emptyMap()
+        return mapOf(
+            "transferOperation" to operation,
+            "transferStage" to p.getString(KEY_TRANSFER_STAGE, "").orEmpty(),
+            "transferBytes" to p.getLong(KEY_TRANSFER_BYTES, 0L),
+            "transferTotalBytes" to p.getLong(KEY_TRANSFER_TOTAL, -1L),
+            "transferPaused" to false
+        )
+    }
 }

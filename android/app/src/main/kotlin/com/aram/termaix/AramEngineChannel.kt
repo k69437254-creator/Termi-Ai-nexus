@@ -41,6 +41,16 @@ object AramEngineChannel {
                         context.startForegroundService(Intent(context, AramEngineService::class.java).setAction(AramEngineService.ACTION_DOWNLOAD_MODEL))
                         result.success(true)
                     }
+                    "cancelDownload" -> {
+                        val id = AppPrefs.downloadId(context)
+                        if (id < 0L) throw IllegalStateException("لا يوجد تنزيل نشط لإلغائه")
+                        val manager = context.getSystemService(android.app.DownloadManager::class.java)
+                        val removed = manager.remove(id)
+                        AppPrefs.setDownloadId(context, -1L)
+                        AppPrefs.clearTransferProgress(context)
+                        AppPrefs.setEngineState(context, "STOPPED", "أُلغي تنزيل نموذج Aram AI بناءً على طلب المستخدم")
+                        result.success(removed > 0)
+                    }
                     "importModel" -> {
                         if (pendingImportResult != null) throw IllegalStateException("منتقي ملف النموذج مفتوح بالفعل")
                         val current = AppPrefs.engineStatus(context)
@@ -62,7 +72,7 @@ object AramEngineChannel {
                     }
                     "status" -> {
                         val status = AppPrefs.engineStatus(context)
-                        result.success(mapOf(
+                        val payload = mutableMapOf<String, Any?>(
                             "state" to status.state,
                             "message" to status.message,
                             "updatedAt" to status.updatedAt,
@@ -72,7 +82,10 @@ object AramEngineChannel {
                             "modelSizeBytes" to runCatching { ModelFiles.modelFile(context).takeIf { it.isFile }?.length() ?: 0L }.getOrDefault(0L),
                             "queuedRequests" to ModelRuntime.pendingRequestCount(),
                             "apiBaseUrl" to "http://127.0.0.1:8766/v1"
-                        ))
+                        )
+                        payload.putAll(AppPrefs.transferProgress(context))
+                        payload.putAll(ModelFiles.downloadProgress(context))
+                        result.success(payload)
                     }
                     "generate" -> {
                         val user = call.argument<String>("user")?.takeIf { it.isNotBlank() }
@@ -80,12 +93,15 @@ object AramEngineChannel {
                         val system = call.argument<String>("system") ?: "أنت مساعد Aram AI. أجب بدقة ووضوح."
                         val maxTokens = call.argument<Int>("maxTokens") ?: 512
                         if (!ModelRuntime.isLoaded()) {
+                            if (!runCatching { ModelFiles.isModelReady(context) }.getOrDefault(false)) {
+                                throw IllegalStateException("نموذج Spark-X2.6-1.7B غير مثبت بعد. افتح مركز محرك Aram AI ونزّل النموذج أو استورده أولاً.")
+                            }
                             context.startForegroundService(Intent(context, AramEngineService::class.java).setAction(AramEngineService.ACTION_START))
                         }
                         scope.launch {
                             try {
                                 var attempts = 0
-                                while (!ModelRuntime.isLoaded() && attempts < 240) {
+                                while (!ModelRuntime.isLoaded() && attempts < 900) {
                                     val current = AppPrefs.engineStatus(context)
                                     if (current.state == "DOWNLOADING_MODEL" || current.state == "ERROR") {
                                         throw IllegalStateException(current.message)
@@ -161,11 +177,16 @@ object AramEngineChannel {
                         throw IllegalStateException("تغيرت حالة المحرك أثناء اختيار الملف؛ أوقف المحرك ثم أعد الاستيراد")
                     }
                     AppPrefs.setEngineState(context, "IMPORTING_MODEL", "يجري نسخ ملف GGUF والتحقق من سلامته…")
-                    ModelFiles.importModel(context, uri)
+                    AppPrefs.setTransferProgress(context, "IMPORT", "COPYING", 0L, -1L)
+                    ModelFiles.importModel(context, uri) { stage, bytes, total ->
+                        AppPrefs.setTransferProgress(context, "IMPORT", stage, bytes, total)
+                    }
+                    AppPrefs.clearTransferProgress(context)
                     AppPrefs.setEngineState(context, "STOPPED", "تم استيراد ملف GGUF والتحقق من ترويسة النموذج وحجمه")
                 }
                 main.post { pending.success(true) }
             } catch (error: Throwable) {
+                AppPrefs.clearTransferProgress(context)
                 val message = error.message ?: error.javaClass.simpleName
                 AppPrefs.setEngineState(context, "ERROR", "فشل استيراد نموذج Aram AI: $message")
                 main.post { pending.error("MODEL_IMPORT_FAILED", message, null) }
