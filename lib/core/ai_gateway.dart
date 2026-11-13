@@ -116,19 +116,39 @@ class AiGateway {
       user: request,
     );
     final decoded = _decodeJson(result);
-    final items = (decoded['tasks'] as List?) ?? const [];
-    final tasks = items.whereType<Map>().map((e) => PlanTask.fromJson(Map<String, dynamic>.from(e))).take(8).map((task) {
+    final items = decoded['tasks'];
+    if (items is! List || items.length < 3 || items.length > 8) {
+      throw AiGatewayException('يجب أن تتضمن الخطة من ثلاث إلى ثماني مهام صالحة.');
+    }
+    final tasks = <PlanTask>[];
+    final seenIds = <String>{};
+    for (final item in items) {
+      if (item is! Map) throw AiGatewayException('تحتوي الخطة على مهمة ليست كائن JSON صالحاً.');
+      final data = Map<String, dynamic>.from(item);
+      for (final field in const ['id', 'title', 'description', 'agentId', 'risk']) {
+        final value = data[field];
+        if (value is! String || value.trim().isEmpty) {
+          throw AiGatewayException('حقل $field مفقود أو فارغ في إحدى مهام الخطة.');
+        }
+      }
       const allowedAgents = {'architect', 'developer', 'qa', 'security'};
       const allowedRisks = {'low', 'medium', 'high'};
-      return PlanTask(
+      if (!allowedAgents.contains(data['agentId'])) {
+        throw AiGatewayException('معرّف الوكيل غير صالح في إحدى مهام الخطة.');
+      }
+      if (!allowedRisks.contains(data['risk'])) {
+        throw AiGatewayException('مستوى المخاطر غير صالح في إحدى مهام الخطة.');
+      }
+      final task = PlanTask.fromJson(data);
+      if (!seenIds.add(task.id)) throw AiGatewayException('تحتوي الخطة على معرفات مهام مكررة: ${task.id}');
+      tasks.add(PlanTask(
         id: task.id,
         title: task.title,
         description: task.description,
-        agentId: allowedAgents.contains(task.agentId) ? task.agentId : 'developer',
-        risk: allowedRisks.contains(task.risk) ? task.risk : 'medium',
-      );
-    }).toList();
-    if (tasks.isEmpty) throw AiGatewayException('لم أتمكن من استخراج مهام صالحة من خطة النموذج.');
+        agentId: task.agentId,
+        risk: task.risk,
+      ));
+    }
     return tasks;
   }
 
@@ -136,23 +156,47 @@ class AiGateway {
     final context = await memory.contextFor(agentId: agentId, projectId: projectId);
     return chat(
       agentId: agentId,
-      system: 'أنت وكيل متخصص في فريق TermiAI-Nexus. أخرج JSON فقط بالشكل {"summary":"...","files":[{"path":"relative/path","content":"full file content"}],"verification":["..."],"risks":[]}. الملفات نصوص كاملة وليست diff. لا تستخدم مسارات مطلقة ولا .. ولا تنفذ أوامر. إذا لم تكن هناك ملفات مطلوبة أعد files مصفوفة فارغة. لا تختلق نتائج اختبار. السياق:\n$context',
+      system: 'أنت وكيل متخصص في فريق TermiAI-Nexus. أخرج JSON فقط بالشكل {"summary":"...","files":[{"path":"relative/path","content":"full file content"}],"verification":["..."],"risks":[]}. الملفات نصوص كاملة وليست diff. لا تستخدم مسارات مطلقة ولا .. ولا تنفذ أوامر. يجب أن تتضمن files ملفاً واحداً على الأقل بتغيير فعلي؛ لا تُعد مصفوفة فارغة أو محتوى مطابقاً لملف قائم. إذا تعذر إجراء تغيير فعلي، اشرح العائق في summary ولا تدّع النجاح. لا تختلق نتائج اختبار. السياق:\n$context',
       user: 'المهمة: $taskTitle\nالتفاصيل: $taskDescription\nأنت تعمل داخل مساحة مشروع معزولة. قدّم ملفات كاملة صغيرة ومتماسكة فقط عند الحاجة.\n\n$workspaceContext',
       temperature: 0.15,
     );
   }
 
-  Map<String, dynamic> parseAgentOutput(String raw) => _decodeJson(raw);
+  Map<String, dynamic> parseAgentOutput(String raw) {
+    final decoded = _decodeJson(raw);
+    final summary = decoded['summary'];
+    if (summary is! String || summary.trim().isEmpty) {
+      throw const FormatException('Agent output must contain a non-empty summary.');
+    }
+    final files = decoded['files'];
+    if (files is! List || files.isEmpty) {
+      throw const FormatException('Agent output must contain at least one file patch.');
+    }
+    for (final item in files) {
+      if (item is! Map) throw const FormatException('Every file patch must be a JSON object.');
+      final path = item['path'];
+      final content = item['content'];
+      if (path is! String || path.trim().isEmpty) {
+        throw const FormatException('Every file patch must contain a non-empty path.');
+      }
+      if (content is! String) {
+        throw const FormatException('Every file patch must contain text content.');
+      }
+    }
+    final verification = decoded['verification'];
+    if (verification is! List || verification.any((item) => item is! String || item.trim().isEmpty)) {
+      throw const FormatException('Agent verification must be a list of non-empty strings.');
+    }
+    return decoded;
+  }
 
   Map<String, dynamic> _decodeJson(String raw) {
     var value = raw.trim();
+    if (value.isEmpty) throw const FormatException('AI response is empty.');
     final fenced = RegExp(r'^```(?:json)?\s*([\s\S]*?)\s*```$', caseSensitive: false).firstMatch(value);
     if (fenced != null) value = fenced.group(1)!.trim();
-    final start = value.indexOf('{');
-    final end = value.lastIndexOf('}');
-    if (start >= 0 && end > start) value = value.substring(start, end + 1);
     final decoded = jsonDecode(value);
-    if (decoded is! Map<String, dynamic>) throw const FormatException('JSON root must be an object');
+    if (decoded is! Map<String, dynamic>) throw const FormatException('JSON root must be an object.');
     return decoded;
   }
 

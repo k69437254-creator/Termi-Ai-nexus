@@ -9,6 +9,30 @@ class WorkspaceCheckpoint {
   final DateTime createdAt;
 }
 
+class WorkspaceRollbackReport {
+  const WorkspaceRollbackReport({
+    required this.restoredPaths,
+    required this.preservedPaths,
+    required this.failedPaths,
+  });
+
+  final List<String> restoredPaths;
+  final List<String> preservedPaths;
+  final List<String> failedPaths;
+  bool get isComplete => failedPaths.isEmpty;
+}
+
+class WorkspaceApplyException implements Exception {
+  const WorkspaceApplyException({required this.message, required this.rollbackFailedPaths});
+
+  final String message;
+  final List<String> rollbackFailedPaths;
+  bool get rollbackComplete => rollbackFailedPaths.isEmpty;
+
+  @override
+  String toString() => message;
+}
+
 class ProjectWorkspace {
   ProjectWorkspace(this.rootPath);
   final String rootPath;
@@ -32,6 +56,7 @@ class ProjectWorkspace {
   }
 
   Map<String, String> validatePatches(List<dynamic> rawFiles) {
+    if (rawFiles.isEmpty) throw const FormatException('A task must provide at least one file patch.');
     if (rawFiles.length > 60) throw const FormatException('A task may write at most 60 files.');
     final patches = <String, String>{};
     var totalCharacters = 0;
@@ -48,39 +73,92 @@ class ProjectWorkspace {
       final relativePath = p.normalize(rawPath.replaceAll('\\', '/'));
       final destination = p.normalize(p.join(rootPath, relativePath));
       if (!p.isWithin(rootPath, destination)) throw FormatException('Path escaped workspace: $rawPath');
+      if (patches.containsKey(relativePath)) throw FormatException('Duplicate file patch path: $relativePath');
       patches[relativePath] = content;
     }
     return patches;
   }
 
-  Future<List<String>> applyPatches(Map<String, String> patches) async {
+  Future<List<String>> applyPatches(
+    Map<String, String> patches, {
+    WorkspaceCheckpoint? checkpoint,
+  }) async {
     await initialize();
+    if (patches.isEmpty) throw const FormatException('Empty patch sets cannot be applied.');
     final changed = <String>[];
+    var index = 0;
     for (final entry in patches.entries) {
       if (!ApprovalPolicy.validRelativePath(entry.key)) {
         throw FormatException('Rejected unsafe file path: ${entry.key}');
       }
       final segments = entry.key.split('/');
       var cursor = rootPath;
-      for (var index = 0; index < segments.length; index++) {
-        cursor = p.join(cursor, segments[index]);
+      for (var segmentIndex = 0; segmentIndex < segments.length; segmentIndex++) {
+        cursor = p.join(cursor, segments[segmentIndex]);
         final type = await FileSystemEntity.type(cursor, followLinks: false);
         if (type == FileSystemEntityType.link) {
           throw FormatException('Symlink paths are not writable by the agent: ${entry.key}');
         }
-        if (index < segments.length - 1 && type != FileSystemEntityType.notFound && type != FileSystemEntityType.directory) {
+        if (segmentIndex < segments.length - 1 && type != FileSystemEntityType.notFound && type != FileSystemEntityType.directory) {
           throw FormatException('A parent path is not a directory: $cursor');
         }
-        if (index == segments.length - 1 && type == FileSystemEntityType.directory) {
+        if (segmentIndex == segments.length - 1 && type == FileSystemEntityType.directory) {
           throw FormatException('A directory cannot be replaced with a file: $cursor');
         }
       }
+
       final file = File(cursor);
+      final currentType = await FileSystemEntity.type(file.path, followLinks: false);
+      if (checkpoint != null && !await _matchesCheckpoint(file, checkpoint, entry.key)) {
+        throw StateError('Workspace conflict: ${entry.key} changed after the task checkpoint.');
+      }
+      if (currentType == FileSystemEntityType.file && await file.readAsString() == entry.value) {
+        index++;
+        continue;
+      }
+      if (currentType != FileSystemEntityType.file && currentType != FileSystemEntityType.notFound) {
+        throw FormatException('Target is not a regular file: ${entry.key}');
+      }
+
       await file.parent.create(recursive: true);
-      await file.writeAsString(entry.value, flush: true);
-      changed.add(entry.key);
+      final temporary = File(p.join(
+        file.parent.path,
+        '.${p.basename(file.path)}.termai-${DateTime.now().microsecondsSinceEpoch}-$index.tmp',
+      ));
+      try {
+        await temporary.writeAsString(entry.value, flush: true);
+        await temporary.rename(file.path);
+        changed.add(entry.key);
+      } catch (_) {
+        if (await temporary.exists()) await temporary.delete();
+        rethrow;
+      }
+      index++;
+    }
+    if (changed.isEmpty) {
+      throw StateError('No file contents changed; an empty or no-op patch cannot complete a task.');
     }
     return changed;
+  }
+
+  Future<bool> _matchesCheckpoint(File current, WorkspaceCheckpoint checkpoint, String relativePath) async {
+    final saved = File(p.join(checkpoint.directory.path, relativePath));
+    final savedType = await FileSystemEntity.type(saved.path, followLinks: false);
+    final currentType = await FileSystemEntity.type(current.path, followLinks: false);
+    if (savedType == FileSystemEntityType.file) {
+      return currentType == FileSystemEntityType.file && await _sameFileContents(current, saved);
+    }
+    return savedType == FileSystemEntityType.notFound && currentType == FileSystemEntityType.notFound;
+  }
+
+  Future<bool> _sameFileContents(File first, File second) async {
+    final firstBytes = await first.readAsBytes();
+    final secondBytes = await second.readAsBytes();
+    if (firstBytes.length != secondBytes.length) return false;
+    for (var i = 0; i < firstBytes.length; i++) {
+      if (firstBytes[i] != secondBytes[i]) return false;
+    }
+    return true;
   }
 
   /// Provides a bounded, secret-filtered snapshot so agents can reason about
@@ -137,43 +215,88 @@ class ProjectWorkspace {
     return output.toString();
   }
 
-  Future<bool> verifyFiles(List<String> paths) async {
-    for (final path in paths) {
-      if (!ApprovalPolicy.validRelativePath(path)) return false;
-      final file = File(p.join(rootPath, path));
+  Future<bool> verifyFiles(Map<String, String> expectedContents) async {
+    if (expectedContents.isEmpty) return false;
+    for (final entry in expectedContents.entries) {
+      if (!ApprovalPolicy.validRelativePath(entry.key)) return false;
+      final file = File(p.join(rootPath, entry.key));
       if (await FileSystemEntity.type(file.path, followLinks: false) != FileSystemEntityType.file) return false;
       if (await file.length() > 2 * 1024 * 1024) return false;
+      if (await file.readAsString() != entry.value) return false;
     }
     return true;
   }
 
   /// Restores only the paths written by the failed task. If a user or another
   /// process changed a file after the agent wrote it, the file is left untouched.
-  Future<void> rollbackPatches(WorkspaceCheckpoint checkpoint, Map<String, String> patches) async {
+  Future<WorkspaceRollbackReport> rollbackPatches(
+    WorkspaceCheckpoint checkpoint,
+    Map<String, String> patches,
+  ) async {
+    final restored = <String>[];
+    final preserved = <String>[];
+    final failed = <String>[];
+    var index = 0;
     for (final entry in patches.entries) {
       final relativePath = entry.key;
-      if (!ApprovalPolicy.validRelativePath(relativePath)) continue;
-      final current = File(p.join(rootPath, relativePath));
-      if (await FileSystemEntity.type(current.path, followLinks: false) != FileSystemEntityType.file) continue;
-      String currentContent;
-      try { currentContent = await current.readAsString(); } catch (_) { continue; }
-      if (currentContent != entry.value) continue;
-
-      final saved = File(p.join(checkpoint.directory.path, relativePath));
-      if (await saved.exists()) {
-        await current.parent.create(recursive: true);
-        await saved.copy(current.path);
-      } else {
-        await current.delete();
-        var parent = current.parent;
-        while (p.isWithin(rootPath, parent.path) && !p.equals(rootPath, parent.path)) {
-          final remaining = await parent.list(followLinks: false).isEmpty;
-          if (!remaining) break;
-          await parent.delete();
-          parent = parent.parent;
-        }
+      if (!ApprovalPolicy.validRelativePath(relativePath)) {
+        failed.add(relativePath);
+        continue;
       }
+      final current = File(p.join(rootPath, relativePath));
+      try {
+        if (await FileSystemEntity.type(current.path, followLinks: false) != FileSystemEntityType.file) {
+          preserved.add(relativePath);
+          continue;
+        }
+        final currentContent = await current.readAsString();
+        if (currentContent != entry.value) {
+          preserved.add(relativePath);
+          continue;
+        }
+
+        final saved = File(p.join(checkpoint.directory.path, relativePath));
+        final savedType = await FileSystemEntity.type(saved.path, followLinks: false);
+        if (savedType == FileSystemEntityType.file) {
+          await current.parent.create(recursive: true);
+          final temporary = File('${current.path}.termai-restore-${DateTime.now().microsecondsSinceEpoch}-$index.tmp');
+          try {
+            await saved.copy(temporary.path);
+            if (await FileSystemEntity.type(current.path, followLinks: false) != FileSystemEntityType.file ||
+                await current.readAsString() != entry.value) {
+              if (await temporary.exists()) await temporary.delete();
+              preserved.add(relativePath);
+              continue;
+            }
+            await temporary.rename(current.path);
+          } catch (_) {
+            if (await temporary.exists()) await temporary.delete();
+            rethrow;
+          }
+        } else if (savedType == FileSystemEntityType.notFound) {
+          await current.delete();
+          var parent = current.parent;
+          while (p.isWithin(rootPath, parent.path) && !p.equals(rootPath, parent.path)) {
+            final remaining = await parent.list(followLinks: false).isEmpty;
+            if (!remaining) break;
+            await parent.delete();
+            parent = parent.parent;
+          }
+        } else {
+          failed.add(relativePath);
+          continue;
+        }
+        restored.add(relativePath);
+      } catch (_) {
+        failed.add(relativePath);
+      }
+      index++;
     }
+    return WorkspaceRollbackReport(
+      restoredPaths: restored,
+      preservedPaths: preserved,
+      failedPaths: failed,
+    );
   }
 
   Future<void> writeAgentNote(String id, String content) async {

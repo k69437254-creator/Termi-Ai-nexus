@@ -48,16 +48,19 @@ class ProjectCoordinator {
   }
 
   Future<ProjectRecord> execute(ProjectRecord project, {int maxRepairAttempts = 3, void Function(PlanTask task)? onTaskChanged}) async {
+    if (maxRepairAttempts < 1) throw ArgumentError.value(maxRepairAttempts, 'maxRepairAttempts', 'Must be at least 1.');
     final workspace = ProjectWorkspace(project.workspacePath);
     await workspace.initialize();
     for (final task in project.tasks) {
       task.status = TaskStatus.running;
       onTaskChanged?.call(task);
       var success = false;
+      var rollbackFailed = false;
       var lastError = '';
-      for (var attempt = 1; attempt <= maxRepairAttempts && !success; attempt++) {
+      for (var attempt = 1; attempt <= maxRepairAttempts && !success && !rollbackFailed; attempt++) {
         final checkpoint = await workspace.checkpoint('${task.id}_attempt_$attempt');
         var attemptedPatches = <String, String>{};
+        var appliedPatches = <String, String>{};
         try {
           final workspaceContext = await workspace.readContextSnapshot();
           final raw = await gateway.executeTask(
@@ -68,20 +71,32 @@ class ProjectCoordinator {
             workspaceContext: workspaceContext,
             memory: memory,
           );
-          Map<String, dynamic> output;
-          try {
-            output = gateway.parseAgentOutput(raw);
-          } catch (_) {
-            output = {'summary': raw, 'files': <dynamic>[], 'verification': <dynamic>[]};
-          }
-          final files = (output['files'] as List?) ?? const [];
+          final output = gateway.parseAgentOutput(raw);
+          final files = output['files'] as List;
           attemptedPatches = workspace.validatePatches(files);
-          final changedPaths = await workspace.applyPatches(attemptedPatches);
-          final verified = await workspace.verifyFiles(changedPaths);
-          if (!verified) throw StateError('File presence verification failed.');
-          final summary = output['summary']?.toString() ?? raw;
-          await workspace.writeAgentNote(task.id, '# ${task.title}\n\n$summary\n\n## Verification requested\n${(output['verification'] as List? ?? const []).join('\n')}\n\n> Presence checks only. No device build or test command was run by this coordinator.');
-          task.result = summary;
+          final changedPaths = await workspace.applyPatches(attemptedPatches, checkpoint: checkpoint);
+          appliedPatches = <String, String>{
+            for (final path in changedPaths) path: attemptedPatches[path]!,
+          };
+          final expectedContents = Map<String, String>.from(appliedPatches);
+          final verified = await workspace.verifyFiles(expectedContents);
+          if (!verified) throw StateError('File content verification failed.');
+          final summary = output['summary'] as String;
+          final proposedChecks = (output['verification'] as List).cast<String>();
+          final checksText = proposedChecks.isEmpty
+              ? 'لم يقدم الوكيل فحوصات مقترحة.'
+              : proposedChecks.map((item) => '- $item').join('\n');
+          final changedFilesText = changedPaths.map((path) => '- `$path`').join('\n');
+          final evidence = '## Execution evidence\n\n'
+              '- Changed files: ${changedPaths.length}\n'
+              '- Full file-content comparison: PASS\n'
+              '- Device build and test commands: NOT RUN\n\n'
+              '## Agent-proposed checks (not executed)\n$checksText';
+          await workspace.writeAgentNote(task.id, '# ${task.title}\n\n$summary\n\n$evidence');
+          task.result = '$summary\n\n'
+              'دليل التنفيذ: تم تعديل ${changedPaths.length} ملف/ملفات والتحقق من تطابق محتوى كل ملف بالكامل.\n'
+              'الملفات المعدلة:\n$changedFilesText\n'
+              'لم تُشغّل اختبارات بناء أو تشغيل على الجهاز.';
           task.status = TaskStatus.completed;
           success = true;
           try {
@@ -97,7 +112,22 @@ class ProjectCoordinator {
         } catch (error) {
           task.status = TaskStatus.running;
           lastError = error.toString();
-          try { await workspace.rollbackPatches(checkpoint, attemptedPatches); } catch (restoreError) { lastError = '$lastError | rollback error: $restoreError'; }
+          if (error is WorkspaceApplyException && !error.rollbackComplete) {
+            rollbackFailed = true;
+          }
+          try {
+            final rollback = await workspace.rollbackPatches(checkpoint, appliedPatches);
+            if (!rollback.isComplete) {
+              rollbackFailed = true;
+              lastError = '$lastError | rollback incomplete for: ${rollback.failedPaths.join(', ')}';
+            }
+            if (rollback.preservedPaths.isNotEmpty) {
+              lastError = '$lastError | preserved external edits: ${rollback.preservedPaths.join(', ')}';
+            }
+          } catch (restoreError) {
+            rollbackFailed = true;
+            lastError = '$lastError | rollback error: $restoreError';
+          }
           try {
             await memory.addAgent(task.agentId, 'فشلت المحاولة $attempt للمهمة ${task.title}: $lastError');
             await memory.addProject(project.id, 'فشلت المحاولة $attempt للمهمة ${task.title} للوكيل ${task.agentId}: $lastError');
@@ -107,8 +137,11 @@ class ProjectCoordinator {
         }
       }
       if (!success) {
-        task.status = TaskStatus.rolledBack;
-        task.result = 'تعذّر إكمال المهمة بعد $maxRepairAttempts محاولات. آخر خطأ: $lastError';
+        task.status = rollbackFailed ? TaskStatus.failed : TaskStatus.rolledBack;
+        final rollbackMessage = rollbackFailed
+            ? 'تعذر إثبات اكتمال التراجع الآمن؛ أوقف النظام المحاولات الإضافية.'
+            : 'تم التراجع عن تغييرات المحاولة مع الحفاظ على التعديلات الخارجية المكتشفة.';
+        task.result = 'تعذّر إكمال المهمة بعد $maxRepairAttempts محاولات. $rollbackMessage آخر خطأ: $lastError';
         onTaskChanged?.call(task);
         break;
       }

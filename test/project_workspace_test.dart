@@ -19,7 +19,15 @@ void main() {
     }
   });
 
-  test('rejects paths outside the workspace and internal metadata paths', () {
+  test('rejects empty, duplicate, outside and internal file patches', () {
+    expect(() => workspace.validatePatches([]), throwsFormatException);
+    expect(
+      () => workspace.validatePatches([
+        {'path': 'lib/a.dart', 'content': 'one'},
+        {'path': 'lib/a.dart', 'content': 'two'},
+      ]),
+      throwsFormatException,
+    );
     expect(
       () => workspace.validatePatches([
         {'path': '../outside.txt', 'content': 'no'},
@@ -32,6 +40,42 @@ void main() {
       ]),
       throwsFormatException,
     );
+  });
+
+  test('requires a real file change and verifies complete expected contents', () async {
+    final file = File('${temporaryRoot.path}/lib/example.dart');
+    await file.parent.create(recursive: true);
+    await file.writeAsString('same content');
+
+    final checkpoint = await workspace.checkpoint('real_change');
+    await expectLater(
+      workspace.applyPatches({'lib/example.dart': 'same content'}, checkpoint: checkpoint),
+      throwsStateError,
+    );
+
+    final changed = await workspace.applyPatches(
+      {'lib/example.dart': 'updated content'},
+      checkpoint: checkpoint,
+    );
+    expect(changed, ['lib/example.dart']);
+    expect(await workspace.verifyFiles({'lib/example.dart': 'updated content'}), isTrue);
+    expect(await workspace.verifyFiles({'lib/example.dart': 'different expected content'}), isFalse);
+  });
+
+  test('rejects writes when a file changed after the task checkpoint', () async {
+    final file = File('${temporaryRoot.path}/README.md');
+    await file.writeAsString('checkpoint version');
+    final checkpoint = await workspace.checkpoint('concurrent_edit');
+    await file.writeAsString('user concurrent edit');
+
+    await expectLater(
+      workspace.applyPatches(
+        {'README.md': 'agent version'},
+        checkpoint: checkpoint,
+      ),
+      throwsStateError,
+    );
+    expect(await file.readAsString(), 'user concurrent edit');
   });
 
   test('creates a bounded context snapshot while skipping common secrets', () async {
@@ -58,10 +102,13 @@ void main() {
       {'path': 'lib/example.dart', 'content': 'agent version'},
       {'path': 'lib/new.dart', 'content': 'agent created'},
     ]);
-    await workspace.applyPatches(patches);
+    await workspace.applyPatches(patches, checkpoint: checkpoint);
     await original.writeAsString('user edit after agent');
-    await workspace.rollbackPatches(checkpoint, patches);
+    final rollback = await workspace.rollbackPatches(checkpoint, patches);
 
+    expect(rollback.isComplete, isTrue);
+    expect(rollback.preservedPaths, contains('lib/example.dart'));
+    expect(rollback.restoredPaths, contains('lib/new.dart'));
     expect(await original.readAsString(), 'user edit after agent');
     expect(await File('${temporaryRoot.path}/lib/new.dart').exists(), isFalse);
   });
