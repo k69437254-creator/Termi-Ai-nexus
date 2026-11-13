@@ -13,30 +13,6 @@ class AramModelDownloadReceiver : BroadcastReceiver() {
         val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
         if (id < 0L || id != AppPrefs.downloadId(context)) return
 
-        val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val cursor = runCatching { manager.query(DownloadManager.Query().setFilterById(id)) }.getOrNull()
-        var successful = false
-        var reason = "تعذر إكمال تنزيل النموذج"
-        cursor?.use {
-            if (it.moveToFirst()) {
-                val status = it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-                val code = it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
-                successful = status == DownloadManager.STATUS_SUCCESSFUL
-                if (!successful) reason = "فشل تنزيل نموذج Aram AI (رمز DownloadManager: $code)"
-            }
-        }
-
-        val finalized = if (successful) {
-            runCatching { ModelFiles.isModelReady(context) || ModelFiles.finalizeDownload(context) }.getOrDefault(false)
-        } else false
-
-        if (finalized) {
-            AppPrefs.setDownloadId(context, -1L)
-            AppPrefs.setEngineState(context, "STOPPED", "اكتمل تنزيل النموذج والتحقق من ملف GGUF؛ افتح مركز المحرك لبدء تشغيله")
-        } else {
-            AppPrefs.setDownloadId(context, -1L)
-            val detail = if (successful) "اكتمل التنزيل لكن تعذر اعتماد ملف GGUF؛ افحص مساحة التخزين أو استورد الملف يدويًا" else reason
-            AppPrefs.setEngineState(context, "ERROR", detail)
-        }
+        ModelFiles.reconcileCompletedDownload(context)
     }
 }

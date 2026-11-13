@@ -199,6 +199,72 @@ object ModelFiles {
         }
     }
 
+    /**
+     * Completes a DownloadManager transfer even when Android's completion broadcast
+     * was missed while the app process was stopped. The synchronized guard also
+     * prevents the receiver and the foreground status poll from promoting the file
+     * at the same time.
+     */
+    @Synchronized
+    fun reconcileCompletedDownload(context: Context): Boolean {
+        val id = AppPrefs.downloadId(context)
+        if (id < 0L) return false
+
+        val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val cursor = runCatching {
+            manager.query(DownloadManager.Query().setFilterById(id))
+        }.getOrNull() ?: return false
+
+        val row = cursor.use {
+            if (!it.moveToFirst()) {
+                null
+            } else {
+                val status = it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                val reason = it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
+                status to reason
+            }
+        } ?: return false
+
+        return when (row.first) {
+            DownloadManager.STATUS_SUCCESSFUL -> {
+                val finalized = runCatching {
+                    isModelReady(context) || finalizeDownload(context)
+                }.getOrDefault(false)
+
+                AppPrefs.setDownloadId(context, -1L)
+                AppPrefs.clearTransferProgress(context)
+
+                if (finalized) {
+                    AppPrefs.setEngineState(
+                        context,
+                        "STOPPED",
+                        "اكتمل تنزيل النموذج والتحقق من ملف GGUF؛ افتح مركز المحرك لبدء تشغيله"
+                    )
+                } else {
+                    AppPrefs.setEngineState(
+                        context,
+                        "ERROR",
+                        "اكتمل التنزيل لكن تعذر اعتماد ملف GGUF؛ أعد التنزيل أو استورد الملف يدويًا"
+                    )
+                }
+                true
+            }
+
+            DownloadManager.STATUS_FAILED -> {
+                AppPrefs.setDownloadId(context, -1L)
+                AppPrefs.clearTransferProgress(context)
+                AppPrefs.setEngineState(
+                    context,
+                    "ERROR",
+                    "فشل تنزيل نموذج Aram AI (رمز DownloadManager: ${row.second})"
+                )
+                true
+            }
+
+            else -> false
+        }
+    }
+
     fun downloadProgress(context: Context): Map<String, Any> {
         val id = AppPrefs.downloadId(context)
         if (id < 0L) return emptyMap()
