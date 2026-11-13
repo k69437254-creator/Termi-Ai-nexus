@@ -1,6 +1,7 @@
 package com.aram.termaix
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
@@ -27,9 +28,9 @@ object AramEngineChannel {
     @Volatile private var pendingImportResult: MethodChannel.Result? = null
     @Volatile private var pendingImportContext: android.content.Context? = null
 
-    fun register(engine: FlutterEngine, activity: Activity) {
+    fun register(engine: FlutterEngine, appContext: Context, activity: Activity? = null) {
+        val context = appContext.applicationContext
         MethodChannel(engine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
-            val context = activity.applicationContext
             val keyStore by lazy { ApiKeyStore(context) }
             try {
                 when (call.method) {
@@ -64,7 +65,9 @@ object AramEngineChannel {
                             type = "*/*"
                             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         }
-                        activity.startActivityForResult(picker, IMPORT_REQUEST_CODE)
+                        val importActivity = activity
+                            ?: throw IllegalStateException("استيراد النموذج يتطلب فتح واجهة التطبيق")
+                        importActivity.startActivityForResult(picker, IMPORT_REQUEST_CODE)
                     }
                     "stop" -> {
                         context.startService(Intent(context, AramEngineService::class.java).setAction(AramEngineService.ACTION_STOP))
