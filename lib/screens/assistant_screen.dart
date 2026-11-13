@@ -2,12 +2,19 @@ import 'package:material_ui/material_ui.dart';
 
 import '../core/nexus_theme.dart';
 import '../core/project_coordinator.dart';
+import '../core/project_execution_manager.dart';
 import '../models/domain.dart';
 import '../widgets/agent_avatar.dart';
 
 class AssistantScreen extends StatefulWidget {
-  const AssistantScreen({super.key, required this.coordinator, this.onBack});
+  const AssistantScreen({
+    super.key,
+    required this.coordinator,
+    required this.executionManager,
+    this.onBack,
+  });
   final ProjectCoordinator coordinator;
+  final ProjectExecutionManager executionManager;
   final VoidCallback? onBack;
 
   @override
@@ -222,7 +229,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
     _scrollToLatest();
 
     try {
-      await widget.coordinator.execute(
+      await widget.executionManager.enqueue(
         project,
         onTaskChanged: (_) {
           if (mounted) {

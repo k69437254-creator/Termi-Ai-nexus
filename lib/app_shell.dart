@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 
 import 'core/nexus_theme.dart';
 import 'core/project_coordinator.dart';
+import 'core/project_execution_manager.dart';
 import 'screens/agents_screen.dart';
 import 'screens/assistant_screen.dart';
 import 'screens/control_screen.dart';
@@ -21,11 +22,13 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   final ProjectCoordinator _coordinator = ProjectCoordinator();
+  late final ProjectExecutionManager _executionManager =
+      ProjectExecutionManager(coordinator: _coordinator);
   int _selected = 0;
 
   Widget _page() => switch (_selected) {
         0 => OfficeScreen(onOpenAssistant: _openAssistant),
-        1 => AssistantScreen(coordinator: _coordinator, onBack: () => setState(() => _selected = 0)),
+        1 => AssistantScreen(coordinator: _coordinator, executionManager: _executionManager, onBack: () => setState(() => _selected = 0)),
         2 => ProjectsScreen(coordinator: _coordinator),
         3 => const ControlScreen(),
         4 => const TerminalScreen(),
