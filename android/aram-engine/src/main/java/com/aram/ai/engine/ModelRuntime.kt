@@ -5,6 +5,7 @@ import android.os.Process
 import android.util.Log
 import com.arm.aichat.AiChat
 import com.arm.aichat.InferenceEngine
+import com.arm.aichat.gguf.GgufMetadataReader
 import com.aram.ai.data.ModelFiles
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -22,6 +23,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.io.File
+import java.io.IOException
 import java.util.PriorityQueue
 import java.util.concurrent.atomic.AtomicLong
 
@@ -74,6 +76,21 @@ object ModelRuntime {
             return@withLock
         }
         Log.i(TAG, "MODEL_LOAD_BEGIN pid=${Process.myPid()} enginePresent=${engine != null}")
+        // GGUF_ARCHITECTURE_PREFLIGHT_V1: validate model metadata before entering JNI.
+        val metadata = withContext(Dispatchers.IO) {
+            modelFile.inputStream().buffered().use { input ->
+                GgufMetadataReader.create().readStructuredMetadata(input)
+            }
+        }
+        val architecture = metadata.architecture?.architecture
+            ?: throw IOException("ملف GGUF لا يحتوي على بيانات المعمارية general.architecture")
+        if (architecture != "spark2_5") {
+            throw IOException("معمارية ملف GGUF هي '$architecture'، بينما يتطلب محركنا spark2_5 الخاص بنموذج Spark-X2.6-1.7B")
+        }
+        if (metadata.tensorCount <= 0L) {
+            throw IOException("ملف GGUF لا يحتوي على أي أوزان (tensorCount=${metadata.tensorCount})")
+        }
+        Log.i(TAG, "GGUF_PREFLIGHT_OK architecture=$architecture version=${metadata.version.code} tensors=${metadata.tensorCount} metadataKeys=${metadata.kvCount} layers=${metadata.dimensions?.blockCount ?: -1} bytes=${modelFile.length()}")
         val instance = engine ?: withContext(Dispatchers.Default) {
             AiChat.getInferenceEngine(context.applicationContext)
         }.also { engine = it }

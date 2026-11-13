@@ -15,6 +15,9 @@ test "$(git -C "$SOURCE" rev-parse HEAD)" = "$COMMIT"
 
 bash "$SOURCE/scripts/prepare_native.sh"
 
+# Preserve detailed GGUF/native loader diagnostics for Android error reporting.
+python3 "$ROOT/scripts/patch_native_load_diagnostics.py"
+
 # The upstream Android binding uses its own version-catalog aliases. Adapt only
 # this pinned module to the host build's plugin/dependency declarations.
 python3 - "$SOURCE/vendor/llama.cpp/examples/llama.android/lib/build.gradle.kts" <<'PY'
