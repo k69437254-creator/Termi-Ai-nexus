@@ -4,6 +4,7 @@ import android.app.DownloadManager
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
+import android.provider.OpenableColumns
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -16,7 +17,11 @@ object ModelFiles {
     const val MODEL_URL =
         "https://huggingface.co/XHToken/Spark-X2.6-1.7B-GGUF/resolve/main/Spark-X2.6-1.7B-Q4_K_M.gguf"
 
-    const val MIN_MODEL_BYTES = 1_500_000_000L
+    // Spark-X2.6-1.7B Q4_K_M variants are published around 1.1–1.8 GB.
+    // Accept smaller valid GGUF quants too; integrity is checked by GGUF magic/version
+    // and, for imports, by comparing the copied size with the provider's declared size.
+    const val MIN_MODEL_BYTES = 550_000_000L
+    private const val MAX_MODEL_BYTES = 4_500_000_000L
 
     private const val TEMP_NAME = "$MODEL_NAME.download"
     private const val IMPORT_TEMP_NAME = "$MODEL_NAME.importing"
@@ -111,8 +116,25 @@ object ModelFiles {
             throw IllegalStateException("تعذر تنظيف ملف الاستيراد المؤقت")
         }
 
-        if (directory.usableSpace < MIN_MODEL_BYTES + MIN_FREE_SPACE_MARGIN) {
-            throw IllegalStateException("مساحة التخزين غير كافية لاستيراد النموذج")
+        val declaredSize = context.contentResolver.query(
+            uri,
+            arrayOf(OpenableColumns.SIZE),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else -1L
+        } ?: -1L
+
+        if (declaredSize >= 0L && declaredSize < MIN_MODEL_BYTES) {
+            throw IllegalArgumentException("حجم ملف GGUF أصغر من الحد الأدنى المقبول؛ قد يكون الملف غير مكتمل")
+        }
+        if (declaredSize > MAX_MODEL_BYTES) {
+            throw IllegalArgumentException("حجم ملف النموذج يتجاوز الحد الأقصى المسموح")
+        }
+        val requiredSpace = if (declaredSize > 0L) declaredSize else MIN_MODEL_BYTES
+        if (directory.usableSpace < requiredSpace + MIN_FREE_SPACE_MARGIN) {
+            throw IllegalStateException("مساحة التخزين غير كافية لنسخ ملف النموذج كاملًا")
         }
 
         try {
@@ -129,8 +151,8 @@ object ModelFiles {
                         if (count < 0) break
 
                         total += count
-                        if (total > MIN_MODEL_BYTES + 512L * 1024L * 1024L) {
-                            throw IllegalStateException("حجم الملف يتجاوز الحد المسموح")
+                        if (total > MAX_MODEL_BYTES) {
+                            throw IllegalStateException("حجم الملف يتجاوز الحد الأقصى المسموح")
                         }
 
                         output.write(buffer, 0, count)
@@ -139,6 +161,10 @@ object ModelFiles {
                     output.flush()
                     output.fd.sync()
                 }
+            }
+
+            if (declaredSize > 0L && temporary.length() != declaredSize) {
+                throw IllegalArgumentException("حجم الملف المنسوخ لا يطابق حجم الملف الأصلي؛ أُوقف الاستيراد لحماية النموذج")
             }
 
             if (!validateModel(temporary)) {

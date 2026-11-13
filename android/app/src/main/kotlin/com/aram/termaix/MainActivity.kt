@@ -1,5 +1,6 @@
 package com.aram.termaix
 
+import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import io.flutter.embedding.android.FlutterActivity
@@ -111,6 +112,12 @@ class MainActivity : FlutterActivity() {
                 mainHandler.post { eventSink?.success(mapOf("id" to handle, "data" to "\r\n[PTY session closed]\r\n")) }
             }
         }
+    }
+
+    @Deprecated("Deprecated in Android API; retained for Flutter document-picker compatibility")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        AramEngineChannel.onActivityResult(requestCode, resultCode, data)
     }
 
     override fun onDestroy() {

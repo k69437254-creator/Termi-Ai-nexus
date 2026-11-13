@@ -21,6 +21,7 @@ class _EngineCenterScreenState extends State<EngineCenterScreen> {
   String _message = 'لم يتم جلب حالة المحرك بعد';
   String _apiBaseUrl = 'http://127.0.0.1:8766/v1';
   bool _loaded = false;
+  bool _modelAvailable = false;
   int _queuedRequests = 0;
   int _updatedAt = 0;
 
@@ -38,7 +39,7 @@ class _EngineCenterScreenState extends State<EngineCenterScreen> {
   }
 
   bool get _isReady => _loaded && _state == 'READY';
-  bool get _isImporting => _state == 'IMPORTING_MODEL' || _state == 'LOADING_MODEL' || _state == 'STARTING' || _state == 'STARTING_SERVER';
+  bool get _isImporting => _state == 'IMPORTING_MODEL' || _state == 'LOADING_MODEL' || _state == 'STARTING' || _state == 'STARTING_SERVER' || _state == 'DOWNLOADING_MODEL';
 
   Color get _stateColor {
     if (_isReady) return NexusPalette.success;
@@ -70,6 +71,7 @@ class _EngineCenterScreenState extends State<EngineCenterScreen> {
         _state = status['state']?.toString() ?? 'UNKNOWN';
         _message = status['message']?.toString() ?? '';
         _loaded = status['loaded'] == true;
+        _modelAvailable = status['modelAvailable'] == true;
         _queuedRequests = (status['queuedRequests'] as num?)?.toInt() ?? 0;
         _apiBaseUrl = status['apiBaseUrl']?.toString() ?? _apiBaseUrl;
         _updatedAt = (status['updatedAt'] as num?)?.toInt() ?? 0;
@@ -81,12 +83,11 @@ class _EngineCenterScreenState extends State<EngineCenterScreen> {
     }
   }
 
-  Future<void> _runAction(String method, {String? successMessage}) async {
+  Future<void> _runAction(String method) async {
     if (_busy) return;
     setState(() => _busy = true);
     try {
       await _channel.invokeMethod<bool>(method);
-      if (successMessage != null && mounted) _showMessage(successMessage);
       await _refreshStatus(silent: true);
     } on PlatformException catch (error) {
       if (mounted) _showMessage(error.message ?? 'تعذر تنفيذ العملية');
@@ -101,8 +102,12 @@ class _EngineCenterScreenState extends State<EngineCenterScreen> {
     if (_busy || _isImporting) return;
     setState(() => _busy = true);
     try {
-      await _channel.invokeMethod<bool>('importModel');
-      if (mounted) _showMessage('تم إرسال طلب اختيار ملف النموذج');
+      final imported = await _channel.invokeMethod<bool>('importModel');
+      if (imported == true && mounted) {
+        _showMessage('تم استيراد نموذج GGUF والتحقق منه بنجاح');
+      } else if (mounted) {
+        _showMessage('تم إلغاء اختيار ملف النموذج');
+      }
       await _refreshStatus(silent: true);
     } on PlatformException catch (error) {
       if (mounted) _showMessage(error.message ?? 'تعذر فتح منتقي الملفات');
@@ -163,11 +168,12 @@ class _EngineCenterScreenState extends State<EngineCenterScreen> {
                   const SizedBox(width: 9),
                   Text(_stateLabel, style: TextStyle(color: _stateColor, fontSize: 17, fontWeight: FontWeight.w900)),
                   const Spacer(),
-                  NexusStatusPill(_loaded ? 'النموذج محمّل' : 'النموذج غير محمّل', color: _loaded ? NexusPalette.success : NexusPalette.muted),
+                  NexusStatusPill(_modelAvailable ? 'ملف النموذج موجود' : 'ملف النموذج غير موجود', color: _modelAvailable ? NexusPalette.success : NexusPalette.muted),
                 ]),
                 const SizedBox(height: 9),
                 Text(_message, style: const TextStyle(color: NexusPalette.muted, fontSize: 11, height: 1.5)),
                 const Divider(height: 23),
+                _statusRow('ملف GGUF في مساحة التطبيق', _modelAvailable ? 'موجود وصالح' : 'غير موجود أو غير صالح'),
                 _statusRow('النموذج في الذاكرة', _loaded ? 'نعم' : 'لا'),
                 _statusRow('طلبات الانتظار', '$_queuedRequests'),
                 _statusRow('واجهة API المحلية', _apiBaseUrl),
@@ -179,16 +185,16 @@ class _EngineCenterScreenState extends State<EngineCenterScreen> {
               child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                 const Text('يمكنك استيراد ملف GGUF موجود على الهاتف، أو تنزيل النموذج من المصدر المحدد في المحرك.', style: TextStyle(color: NexusPalette.muted, fontSize: 11, height: 1.5)),
                 const SizedBox(height: 13),
-                FilledButton.icon(onPressed: _busy || _isImporting ? null : _importModel, icon: const Icon(Icons.file_upload_outlined), label: const Text('استيراد نموذج GGUF من الهاتف')),
+                FilledButton.icon(onPressed: _busy || _isReady || _isImporting || _state == 'DOWNLOADING_MODEL' ? null : _importModel, icon: const Icon(Icons.file_upload_outlined), label: const Text('استيراد نموذج GGUF من الهاتف')),
                 const SizedBox(height: 9),
-                OutlinedButton.icon(onPressed: _busy || _isReady ? null : () => _runAction('downloadModel', successMessage: 'تم إرسال طلب تنزيل النموذج'), icon: const Icon(Icons.download_rounded), label: const Text('تنزيل النموذج من المصدر')),
+                OutlinedButton.icon(onPressed: _busy || _isReady || _modelAvailable ? null : () => _runAction('downloadModel'), icon: const Icon(Icons.download_rounded), label: const Text('تنزيل النموذج من المصدر')),
               ]),
             ),
             _sectionCard(
               title: 'التحكم بالمحرك',
               icon: Icons.settings_suggest_rounded,
               child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                FilledButton.icon(onPressed: _busy || _isReady || _isImporting ? null : () => _runAction('start', successMessage: 'تم إرسال طلب تشغيل المحرك'), icon: const Icon(Icons.play_arrow_rounded), label: const Text('تشغيل المحرك')),
+                FilledButton.icon(onPressed: _busy || _isReady || _isImporting ? null : () => _runAction('start'), icon: const Icon(Icons.play_arrow_rounded), label: const Text('تشغيل المحرك')),
                 const SizedBox(height: 9),
                 OutlinedButton.icon(onPressed: _busy || (_state == 'STOPPED' && !_loaded) ? null : () => _runAction('stop', successMessage: 'تم إرسال طلب إيقاف المحرك'), icon: const Icon(Icons.stop_rounded), label: const Text('إيقاف المحرك')),
               ]),

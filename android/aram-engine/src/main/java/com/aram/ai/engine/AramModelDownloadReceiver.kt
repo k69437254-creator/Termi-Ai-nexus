@@ -26,12 +26,18 @@ class AramModelDownloadReceiver : BroadcastReceiver() {
             }
         }
 
-        if (successful && ModelFiles.finalizeDownload(context)) {
+        val finalized = if (successful) {
+            runCatching { ModelFiles.isModelReady(context) || ModelFiles.finalizeDownload(context) }.getOrDefault(false)
+        } else false
+
+        if (finalized) {
             AppPrefs.setDownloadId(context, -1L)
-            AppPrefs.setEngineState(context, "STOPPED", "اكتمل تنزيل النموذج؛ يجري تجهيز محرك Aram AI عند أول طلب")
+            AppPrefs.setEngineState(context, "STOPPED", "اكتمل تنزيل النموذج والتحقق من ملف GGUF؛ يجري تشغيل المحرك")
             context.startForegroundService(Intent(context, AramEngineService::class.java).setAction(AramEngineService.ACTION_START))
         } else {
-            AppPrefs.setEngineState(context, "ERROR", reason)
+            AppPrefs.setDownloadId(context, -1L)
+            val detail = if (successful) "اكتمل التنزيل لكن تعذر اعتماد ملف GGUF؛ افحص مساحة التخزين أو استورد الملف يدويًا" else reason
+            AppPrefs.setEngineState(context, "ERROR", detail)
         }
     }
 }

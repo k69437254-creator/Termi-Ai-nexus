@@ -46,8 +46,80 @@ class AramEngineService : Service() {
             stopSelf(startId)
             return START_NOT_STICKY
         }
-        startEngine()
+        if (intent?.action == ACTION_DOWNLOAD_MODEL) {
+            startModelDownload()
+        } else {
+            startEngine()
+        }
         return START_STICKY
+    }
+
+    private fun downloadStatus(id: Long): Int? {
+        if (id < 0L) return null
+        val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val cursor = runCatching { manager.query(DownloadManager.Query().setFilterById(id)) }.getOrNull() ?: return null
+        cursor.use {
+            if (!it.moveToFirst()) return null
+            return it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+        }
+    }
+
+    private fun startModelDownload() {
+        scope.launch {
+            var shouldStart = false
+            var shouldStop = false
+            var failure: String? = null
+            lifecycleMutex.withLock {
+                try {
+                    if (ModelRuntime.isLoaded() && server != null) {
+                        AppPrefs.setEngineState(this@AramEngineService, "READY", "محرك Aram AI يعمل بالفعل")
+                    } else if (ModelFiles.isModelReady(this@AramEngineService)) {
+                        AppPrefs.setEngineState(this@AramEngineService, "STOPPED", "ملف النموذج موجود وصالح؛ لا حاجة إلى تنزيل نسخة أخرى")
+                        shouldStart = true
+                    } else {
+                        val currentId = AppPrefs.downloadId(this@AramEngineService)
+                        when (downloadStatus(currentId)) {
+                            DownloadManager.STATUS_PENDING,
+                            DownloadManager.STATUS_RUNNING,
+                            DownloadManager.STATUS_PAUSED -> {
+                                AppPrefs.setEngineState(this@AramEngineService, "DOWNLOADING_MODEL", "تنزيل نموذج Spark-X2.6-1.7B جارٍ بالفعل؛ لن يبدأ تنزيل مكرر")
+                                updateNotification("تنزيل نموذج Spark-X2.6-1.7B جارٍ بالفعل")
+                                shouldStop = true
+                            }
+                            DownloadManager.STATUS_SUCCESSFUL -> {
+                                if (ModelFiles.finalizeDownload(this@AramEngineService) || ModelFiles.isModelReady(this@AramEngineService)) {
+                                    AppPrefs.setDownloadId(this@AramEngineService, -1L)
+                                    AppPrefs.setEngineState(this@AramEngineService, "STOPPED", "اكتمل تنزيل النموذج والتحقق منه")
+                                    shouldStart = true
+                                } else {
+                                    failure = "اكتمل تنزيل Android لكن ملف GGUF لم يجتز التحقق؛ أعد اختيار الملف أو أعد التنزيل بعد حذف التنزيل غير الصالح"
+                                }
+                            }
+                            else -> {
+                                val newId = ModelFiles.enqueueDownload(this@AramEngineService)
+                                AppPrefs.setDownloadId(this@AramEngineService, newId)
+                                AppPrefs.setEngineState(this@AramEngineService, "DOWNLOADING_MODEL", "بدأ تنزيل نموذج Spark-X2.6-1.7B؛ سيجري التحقق منه قبل تشغيله")
+                                updateNotification("تنزيل نموذج Spark-X2.6-1.7B جارٍ عبر Download Manager")
+                                shouldStop = true
+                            }
+                        }
+                    }
+                } catch (error: Throwable) {
+                    failure = error.message ?: error.javaClass.simpleName
+                }
+                if (failure != null) {
+                    AppPrefs.setEngineState(this@AramEngineService, "ERROR", "تعذر تنزيل أو تجهيز النموذج: $failure")
+                    shouldStop = true
+                }
+            }
+            if (shouldStart) {
+                startEngine()
+            } else if (shouldStop) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                releaseWakeLock()
+                stopSelf()
+            }
+        }
     }
 
     private fun startEngine() {
@@ -65,21 +137,25 @@ class AramEngineService : Service() {
                 try {
                     if (!ModelFiles.isModelReady(this@AramEngineService)) {
                         val currentId = AppPrefs.downloadId(this@AramEngineService)
-
-                        if (!isDownloadActive(currentId)) {
-                            val newId = ModelFiles.enqueueDownload(this@AramEngineService)
-                            AppPrefs.setDownloadId(this@AramEngineService, newId)
+                        val currentDownloadStatus = downloadStatus(currentId)
+                        if (currentDownloadStatus == DownloadManager.STATUS_PENDING ||
+                            currentDownloadStatus == DownloadManager.STATUS_RUNNING ||
+                            currentDownloadStatus == DownloadManager.STATUS_PAUSED) {
+                            AppPrefs.setEngineState(this@AramEngineService, "DOWNLOADING_MODEL", "تنزيل النموذج لم يكتمل بعد؛ لن يبدأ المحرك أو تنزيل نسخة مكررة")
+                            updateNotification("تنزيل نموذج Spark-X2.6-1.7B جارٍ")
+                            stopForeground(STOP_FOREGROUND_REMOVE)
+                            releaseWakeLock()
+                            stopSelf()
+                            return@withLock
                         }
-
-                        AppPrefs.setEngineState(
-                            this@AramEngineService,
-                            "DOWNLOADING_MODEL",
-                            "يجري تنزيل Spark-X2.6-1.7B إلى مساحة TermiAI-Nexus الخاصة…"
-                        )
-                        updateNotification("تنزيل نموذج Spark-X2.6-1.7B جارٍ عبر Download Manager")
-                        stopForeground(STOP_FOREGROUND_REMOVE)
-                        stopSelf()
-                        return@withLock
+                        if (currentDownloadStatus == DownloadManager.STATUS_SUCCESSFUL) {
+                            if (!ModelFiles.finalizeDownload(this@AramEngineService)) {
+                                throw IllegalStateException("اكتمل التنزيل لكن ملف GGUF المؤقت غير صالح أو غير موجود")
+                            }
+                            AppPrefs.setDownloadId(this@AramEngineService, -1L)
+                        } else {
+                            throw IllegalStateException("ملف النموذج غير موجود في مساحة التطبيق. استخدم تنزيل النموذج أو استيراده من الهاتف أولًا")
+                        }
                     }
 
                     AppPrefs.setEngineState(
@@ -135,17 +211,6 @@ class AramEngineService : Service() {
                     starting = false
                 }
             }
-        }
-    }
-
-    private fun isDownloadActive(id: Long): Boolean {
-        if (id < 0L) return false
-        val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val cursor = runCatching { manager.query(DownloadManager.Query().setFilterById(id)) }.getOrNull() ?: return false
-        cursor.use {
-            if (!it.moveToFirst()) return false
-            val status = it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-            return status == DownloadManager.STATUS_PENDING || status == DownloadManager.STATUS_RUNNING || status == DownloadManager.STATUS_PAUSED
         }
     }
 
@@ -259,6 +324,7 @@ class AramEngineService : Service() {
 
     companion object {
         const val ACTION_START = "com.aram.termaix.aram.START"
+        const val ACTION_DOWNLOAD_MODEL = "com.aram.termaix.aram.DOWNLOAD_MODEL"
         const val ACTION_STOP = "com.aram.termaix.aram.STOP"
         private const val CHANNEL_ID = "termi_aram_engine"
         private const val NOTIFICATION_ID = 8806
