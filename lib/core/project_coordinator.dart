@@ -43,6 +43,18 @@ class ProjectCoordinator {
     final workspace = ProjectWorkspace(project.workspacePath);
     await workspace.initialize();
     for (final task in project.tasks) {
+      if (task.status == TaskStatus.completed) continue;
+
+      if (task.status == TaskStatus.running) {
+        task.status = TaskStatus.interrupted;
+        task.result = 'انقطع التنفيذ أثناء هذه المهمة. لم تتم إعادة تشغيلها تلقائياً لتجنب تكرار آثار جانبية؛ يلزم فحص حالتها قبل الاستئناف.';
+        await save(project);
+        onTaskChanged?.call(task);
+        break;
+      }
+
+      if (task.status != TaskStatus.pending) break;
+
       task.status = TaskStatus.running;
       await save(project);
       onTaskChanged?.call(task);

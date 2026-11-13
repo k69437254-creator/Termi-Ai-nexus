@@ -217,6 +217,10 @@ class AramEngineService : Service() {
     private fun stopEngine() {
         scope.launch {
             lifecycleMutex.withLock {
+                if (ModelRuntime.activeExecutionLeaseCount() > 0) {
+                    updateNotification("هناك مشروع قيد التنفيذ؛ تم تأجيل إيقاف محرك Spark")
+                    return@withLock
+                }
                 AppPrefs.setEngineState(
                     this@AramEngineService,
                     "STOPPING",

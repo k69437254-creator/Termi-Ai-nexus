@@ -26,6 +26,8 @@ import java.io.File
 import java.io.IOException
 import java.util.PriorityQueue
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 class GenerationQueueFullException(message: String = "طابور التوليد ممتلئ؛ أعد المحاولة بعد اكتمال الطلبات الحالية.") : IllegalStateException(message)
 
@@ -54,6 +56,27 @@ object ModelRuntime {
     }
 
     private val sequence = AtomicLong(0L)
+    private val executionLeases = AtomicInteger(0)
+
+    /**
+     * Prevents model unloading while a project execution owns the runtime.
+     * The lease is acquired only while the model is loaded and accepting requests.
+     */
+    suspend fun acquireExecutionLease(): AutoCloseable = initLock.withLock {
+        check(loaded && acceptingRequests) {
+            "لا يمكن بدء تنفيذ المشروع قبل جاهزية نموذج Spark"
+        }
+        executionLeases.incrementAndGet()
+        val released = AtomicBoolean(false)
+        AutoCloseable {
+            if (released.compareAndSet(false, true)) {
+                executionLeases.decrementAndGet()
+            }
+        }
+    }
+
+    fun activeExecutionLeaseCount(): Int = executionLeases.get()
+
     private val queueMonitor = Any()
     private val pending = PriorityQueue<QueuedGeneration>(
         compareBy<QueuedGeneration> { it.priority }.thenBy { it.sequence }
@@ -247,19 +270,39 @@ object ModelRuntime {
 
     suspend fun unload(reason: String = "unspecified") {
         Log.w(TAG, "MODEL_UNLOAD_REQUEST pid=${Process.myPid()} reason=$reason loaded=$loaded")
-        acceptingRequests = false
-        synchronized(queueMonitor) {
-            while (pending.isNotEmpty()) {
-                pending.poll().result.completeExceptionally(IllegalStateException("تم إيقاف المحرك قبل تنفيذ الطلب."))
+
+        val mayUnload = initLock.withLock {
+            if (executionLeases.get() > 0) {
+                Log.w(TAG, "MODEL_UNLOAD_DEFERRED reason=$reason activeProjectLeases=${executionLeases.get()}")
+                false
+            } else {
+                acceptingRequests = false
+                true
             }
         }
-        // Let the active native call finish cleanly; cancelling during JNI template or
-        // decode work can leave the singleton in a non-unloadable transient state.
+        if (!mayUnload) return
+
+        synchronized(queueMonitor) {
+            while (pending.isNotEmpty()) {
+                pending.poll().result.completeExceptionally(
+                    IllegalStateException("تم إيقاف المحرك قبل تنفيذ الطلب.")
+                )
+            }
+        }
+
+        // Let the active native call finish cleanly before releasing the singleton.
         generationLock.withLock {
             initLock.withLock {
+                // Recheck under the lifecycle lock before destroying native resources.
+                if (executionLeases.get() > 0) {
+                    acceptingRequests = true
+                    Log.w(TAG, "MODEL_UNLOAD_ABORTED activeProjectLeases=${executionLeases.get()}")
+                    return@withLock
+                }
                 val current = engine
                 engine = null
                 loaded = false
+                acceptingRequests = false
                 systemPromptConfigured = false
                 if (current != null) withContext(Dispatchers.IO) { current.cleanUp() }
                 Log.i(TAG, "MODEL_UNLOAD_COMPLETE pid=${Process.myPid()} reason=$reason")

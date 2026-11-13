@@ -240,7 +240,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
         },
       );
       if (mounted) {
-        final failed = project.tasks.any((task) => task.status == TaskStatus.rolledBack || task.status == TaskStatus.failed);
+        final failed = project.tasks.any((task) => task.status == TaskStatus.rolledBack || task.status == TaskStatus.failed || task.status == TaskStatus.interrupted);
         setState(() {
           _executedProjects.add(project.id);
           _messages.add(_ChatMessage(
@@ -569,7 +569,7 @@ class _TaskLine extends StatelessWidget {
     final color = switch (task.status) {
       TaskStatus.completed => NexusPalette.success,
       TaskStatus.running => NexusPalette.primaryLight,
-      TaskStatus.failed || TaskStatus.rolledBack => NexusPalette.danger,
+      TaskStatus.failed || TaskStatus.rolledBack || TaskStatus.interrupted => NexusPalette.danger,
       _ => NexusPalette.muted,
     };
     return Padding(

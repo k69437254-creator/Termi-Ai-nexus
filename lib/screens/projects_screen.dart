@@ -143,7 +143,7 @@ class _ProjectDetails extends StatelessWidget {
                 final color = switch (task.status) {
                   TaskStatus.completed => NexusPalette.success,
                   TaskStatus.running => NexusPalette.primaryLight,
-                  TaskStatus.failed || TaskStatus.rolledBack => NexusPalette.danger,
+                  TaskStatus.failed || TaskStatus.rolledBack || TaskStatus.interrupted => NexusPalette.danger,
                   _ => NexusPalette.muted,
                 };
                 return Padding(

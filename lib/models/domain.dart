@@ -1,7 +1,7 @@
 import 'dart:convert';
 
 enum AgentStatus { idle, thinking, working, waiting, error }
-enum TaskStatus { pending, running, completed, failed, rolledBack }
+enum TaskStatus { pending, running, completed, failed, rolledBack, interrupted }
 
 enum AgentRole { manager, architect, developer, qa, security }
 
