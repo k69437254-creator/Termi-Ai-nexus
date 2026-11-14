@@ -1,22 +1,25 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'package:flutter/services.dart';
+
 import '../models/domain.dart';
 import 'project_coordinator.dart';
 
-/// App-scoped queue for project execution.
+/// App-scoped controller for Android background project execution.
 ///
-/// This manager survives page navigation because AppShell owns it.
-/// It is an in-memory queue; Android background execution and recovery
-/// after process termination are implemented in later integration steps.
+/// Android owns execution. This manager only submits jobs and mirrors
+/// their persisted task states into the current UI isolate.
 class ProjectExecutionManager {
   ProjectExecutionManager({required ProjectCoordinator coordinator})
       : _coordinator = coordinator;
 
+  static const MethodChannel _engineChannel =
+      MethodChannel('termai/aram-engine');
+
   final ProjectCoordinator _coordinator;
   final Queue<_QueuedProject> _queue = Queue<_QueuedProject>();
   final Set<String> _queuedOrRunningProjectIds = <String>{};
-  final Map<String, ProjectExecutionControl> _controls = {};
 
   bool _draining = false;
 
@@ -38,15 +41,11 @@ class ProjectExecutionManager {
     }
 
     final completer = Completer<ProjectRecord>();
-    final control = ProjectExecutionControl();
-    _controls[project.id] = control;
-
     _queue.add(
       _QueuedProject(
         project: project,
         onTaskChanged: onTaskChanged,
         completer: completer,
-        control: control,
       ),
     );
 
@@ -54,35 +53,26 @@ class ProjectExecutionManager {
     return completer.future;
   }
 
+  /// Queued jobs can be removed safely before Android starts them.
+  /// Active-service cancellation is connected in the dedicated cancellation
+  /// integration step; this method never reports a false cancellation.
   Future<bool> cancel(String projectId) async {
-    final control = _controls[projectId];
-    if (control == null || control.cancelRequested) return false;
-    control.cancelRequested = true;
-
     _QueuedProject? queuedJob;
+
     for (final job in _queue) {
       if (job.project.id == projectId) {
         queuedJob = job;
         break;
       }
     }
-    if (queuedJob != null) {
-      _queue.remove(queuedJob);
-      _controls.remove(projectId);
-      _queuedOrRunningProjectIds.remove(projectId);
-      if (!queuedJob.completer.isCompleted) {
-        queuedJob.completer.complete(queuedJob.project);
-      }
-      return true;
-    }
 
-    final requestId = control.requestId;
-    if (requestId != null) {
-      try {
-        await _coordinator.cancelGeneration(requestId);
-      } catch (_) {
-        // The cancellation flag remains active; the coordinator checks it at safe boundaries.
-      }
+    if (queuedJob == null) return false;
+
+    _queue.remove(queuedJob);
+    _queuedOrRunningProjectIds.remove(projectId);
+
+    if (!queuedJob.completer.isCompleted) {
+      queuedJob.completer.complete(queuedJob.project);
     }
     return true;
   }
@@ -91,18 +81,13 @@ class ProjectExecutionManager {
     if (_draining) return;
 
     _draining = true;
-
     try {
       while (_queue.isNotEmpty) {
         final job = _queue.removeFirst();
 
         try {
-          final result = await _coordinator.execute(
-            job.project,
-            onTaskChanged: job.onTaskChanged,
-            control: job.control,
-          );
-
+          await _startAndroidExecution(job.project.id);
+          final result = await _watchPersistedExecution(job);
           if (!job.completer.isCompleted) {
             job.completer.complete(result);
           }
@@ -111,17 +96,99 @@ class ProjectExecutionManager {
             job.completer.completeError(error, stackTrace);
           }
         } finally {
-          _controls.remove(job.project.id);
           _queuedOrRunningProjectIds.remove(job.project.id);
         }
       }
     } finally {
       _draining = false;
-
       if (_queue.isNotEmpty) {
         unawaited(_drain());
       }
     }
+  }
+
+  Future<void> _startAndroidExecution(String projectId) async {
+    final started = await _engineChannel.invokeMethod<bool>(
+      'startProjectExecution',
+      <String, Object?>{'projectId': projectId},
+    );
+
+    if (started != true) {
+      throw StateError(
+        'Android did not confirm starting project execution.',
+      );
+    }
+  }
+
+  Future<ProjectRecord> _watchPersistedExecution(
+    _QueuedProject job,
+  ) async {
+    while (true) {
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+
+      final projects = await _coordinator.listProjects();
+      ProjectRecord? persisted;
+
+      for (final candidate in projects) {
+        if (candidate.id == job.project.id) {
+          persisted = candidate;
+          break;
+        }
+      }
+
+      if (persisted == null) {
+        throw StateError(
+          'Project ${job.project.id} disappeared from persistent storage.',
+        );
+      }
+
+      _mirrorTaskStates(job.project, persisted, job.onTaskChanged);
+
+      if (_isExecutionFinished(persisted)) {
+        return job.project;
+      }
+    }
+  }
+
+  void _mirrorTaskStates(
+    ProjectRecord target,
+    ProjectRecord source,
+    void Function(PlanTask task)? onTaskChanged,
+  ) {
+    final sourceById = <String, PlanTask>{
+      for (final task in source.tasks) task.id: task,
+    };
+
+    for (final task in target.tasks) {
+      final saved = sourceById[task.id];
+      if (saved == null) continue;
+
+      final changed =
+          task.status != saved.status || task.result != saved.result;
+
+      if (!changed) continue;
+
+      task.status = saved.status;
+      task.result = saved.result;
+      onTaskChanged?.call(task);
+    }
+  }
+
+  bool _isExecutionFinished(ProjectRecord project) {
+    if (project.tasks.isEmpty) return false;
+
+    final stoppedWithFailure = project.tasks.any(
+      (task) =>
+          task.status == TaskStatus.failed ||
+          task.status == TaskStatus.rolledBack ||
+          task.status == TaskStatus.interrupted,
+    );
+
+    if (stoppedWithFailure) return true;
+
+    return project.tasks.every(
+      (task) => task.status == TaskStatus.completed,
+    );
   }
 }
 
@@ -130,11 +197,9 @@ class _QueuedProject {
     required this.project,
     required this.onTaskChanged,
     required this.completer,
-    required this.control,
   });
 
   final ProjectRecord project;
   final void Function(PlanTask task)? onTaskChanged;
   final Completer<ProjectRecord> completer;
-  final ProjectExecutionControl control;
 }
