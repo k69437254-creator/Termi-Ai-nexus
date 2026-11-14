@@ -305,7 +305,10 @@ class ProjectExecutionService : Service() {
             ConcurrentHashMap.newKeySet<String>()
 
         fun isExecuting(projectId: String): Boolean =
-            instance?.activeProjectId == projectId
+            instance?.let { service ->
+                service.activeProjectId == projectId ||
+                    service.pendingProjectIds.contains(projectId)
+            } == true
 
         fun requestCancellation(
             projectId: String,
