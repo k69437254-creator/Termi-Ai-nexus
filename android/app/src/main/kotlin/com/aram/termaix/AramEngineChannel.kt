@@ -47,6 +47,12 @@ object AramEngineChannel {
                         )
                         result.success(true)
                     }
+                    "isProjectExecutionActive" -> {
+                        val projectId = call.argument<String>("projectId")
+                            ?.trim()?.takeIf { it.isNotEmpty() }
+                            ?: throw IllegalArgumentException("معرف المشروع مفقود")
+                        result.success(ProjectExecutionService.isExecuting(projectId))
+                    }
                     "cancelProjectExecution" -> {
                         val projectId = call.argument<String>("projectId")
                             ?.trim()?.takeIf { it.isNotEmpty() }

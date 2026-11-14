@@ -304,6 +304,9 @@ class ProjectExecutionService : Service() {
         private val pendingCancellationProjectIds =
             ConcurrentHashMap.newKeySet<String>()
 
+        fun isExecuting(projectId: String): Boolean =
+            instance?.activeProjectId == projectId
+
         fun requestCancellation(
             projectId: String,
             result: MethodChannel.Result

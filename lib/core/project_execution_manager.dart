@@ -190,6 +190,43 @@ class ProjectExecutionManager {
       if (_isExecutionFinished(persisted)) {
         return job.project;
       }
+
+      final serviceActive = await _engineChannel.invokeMethod<bool>(
+        'isProjectExecutionActive',
+        <String, Object?>{'projectId': job.project.id},
+      );
+
+      if (serviceActive == false) {
+        var changed = false;
+
+        for (final task in persisted.tasks) {
+          if (task.status == TaskStatus.running) {
+            task.status = TaskStatus.interrupted;
+            task.result =
+                'توقفت خدمة تنفيذ المشروع قبل اكتمال المهمة. '
+                'لم تُعد المهمة تلقائياً لتجنب تكرار آثار جانبية.';
+            changed = true;
+          } else if (task.status == TaskStatus.pending) {
+            task.status = TaskStatus.interrupted;
+            task.result =
+                'لم تبدأ المهمة لأن خدمة تنفيذ المشروع توقفت.';
+            changed = true;
+          }
+        }
+
+        if (changed) {
+          await _coordinator.save(persisted);
+          _mirrorTaskStates(job.project, persisted, job.onTaskChanged);
+        }
+
+        if (_isExecutionFinished(persisted)) {
+          return job.project;
+        }
+
+        throw StateError(
+          'Android project service stopped before the project reached a terminal state.',
+        );
+      }
     }
   }
 
