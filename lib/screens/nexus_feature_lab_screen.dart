@@ -274,7 +274,7 @@ class _NexusFeatureLabScreenState extends State<NexusFeatureLabScreen> {
             icon: Icons.folder_special_rounded,
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               DropdownButtonFormField<String>(
-                value: _selectedProjectId,
+                initialValue: _selectedProjectId,
                 isExpanded: true,
                 decoration: const InputDecoration(labelText: 'مساحة العمل'),
                 items: _projects.map((project) => DropdownMenuItem(value: project.id, child: Text(project.name, overflow: TextOverflow.ellipsis))).toList(),
@@ -372,7 +372,7 @@ class _NexusFeatureLabScreenState extends State<NexusFeatureLabScreen> {
           padding: const EdgeInsets.all(14),
           radius: 19,
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [NexusIconTile(icon, size: 36), const SizedBox(width: 9), Expanded(child: Text(title, style: const TextStyle(color: NexusPalette.text, fontSize: 12, fontWeight: FontWeight.w900))), if (trailing != null) trailing]),
+            Row(children: [NexusIconTile(icon, size: 36), const SizedBox(width: 9), Expanded(child: Text(title, style: const TextStyle(color: NexusPalette.text, fontSize: 12, fontWeight: FontWeight.w900))), ?trailing]),
             const SizedBox(height: 11),
             child,
           ]),

@@ -252,7 +252,9 @@ class ProjectWorkspace {
       final type = await FileSystemEntity.type(entity.path, followLinks: false);
       if (type == FileSystemEntityType.link) continue;
       if (type != FileSystemEntityType.file &&
-          type != FileSystemEntityType.directory) continue;
+          type != FileSystemEntityType.directory) {
+        continue;
+      }
       final name = p.basename(entity.path);
       if (ApprovalPolicy.isSensitivePathSegment(name)) continue;
       entries.add({
@@ -477,7 +479,9 @@ class ProjectWorkspace {
       if (isLeaf && requireFile && type != FileSystemEntityType.file) return false;
       if (isLeaf && !requireFile &&
           type != FileSystemEntityType.file &&
-          type != FileSystemEntityType.notFound) return false;
+          type != FileSystemEntityType.notFound) {
+        return false;
+      }
     }
     return true;
   }
@@ -584,7 +588,9 @@ class ProjectWorkspace {
       final name = p.basename(entity.path);
       if (name == '.git' ||
           (skipTermaiCheckpoints && name == '.termai') ||
-          ApprovalPolicy.isSensitivePathSegment(name)) continue;
+          ApprovalPolicy.isSensitivePathSegment(name)) {
+        continue;
+      }
       final destination = p.join(target.path, name);
       if (entity is Directory) {
         await _copyTree(entity, Directory(destination), skipTermaiCheckpoints: skipTermaiCheckpoints);

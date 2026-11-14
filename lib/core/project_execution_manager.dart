@@ -11,8 +11,7 @@ import 'project_coordinator.dart';
 /// Android owns execution. This manager only submits jobs and mirrors
 /// their persisted task states into the current UI isolate.
 class ProjectExecutionManager {
-  ProjectExecutionManager({required ProjectCoordinator coordinator})
-      : _coordinator = coordinator;
+  ProjectExecutionManager({required this._coordinator});
 
   static const MethodChannel _engineChannel =
       MethodChannel('termai/aram-engine');

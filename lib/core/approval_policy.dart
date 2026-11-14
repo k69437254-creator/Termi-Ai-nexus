@@ -55,7 +55,9 @@ class ApprovalPolicy {
     final segments = normalized.split('/');
     if (segments.any((part) =>
         part.isEmpty || part == '.' || part == '..' ||
-        isSensitivePathSegment(part))) return false;
+        isSensitivePathSegment(part))) {
+      return false;
+    }
     return true;
   }
 }
