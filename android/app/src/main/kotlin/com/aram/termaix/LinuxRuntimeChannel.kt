@@ -11,7 +11,10 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.RandomAccessFile
 import java.net.HttpURLConnection
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.net.URL
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
@@ -127,24 +130,25 @@ object LinuxRuntimeChannel {
             val archive = File(downloadDir, "ubuntu-base-24.04.5-base-arm64.tar.gz")
             downloadAndVerify(archive)
 
-            val extraction = runProot(
-                context = context,
-                root = target,
-                extraBinds = listOf(
-                    "/system:/system",
-                    "/apex:/apex",
-                    "${downloadDir.absolutePath}:/mnt/host"
-                ),
-                workingDirectory = "/",
-                command = listOf(
-                    "/system/bin/toybox", "tar", "-xzpf",
-                    "/mnt/host/${archive.name}", "-C", "/"
-                ),
-                timeoutMs = 8 * 60 * 1000L
-            )
-            requireSuccess("استخراج Ubuntu Base", extraction)
+            // Extract with Android's host Toybox, not from inside the not-yet-built
+            // guest. This avoids asking PRoot to resolve guest paths while creating them.
+            val extraction = runHostTar(context, archive, target)
+            requireSuccess("استخراج Ubuntu Base مباشرة من Android", extraction)
+            validateUbuntuBase(target)
 
             prepareGuestConfig(context, target)
+            // Prove that PRoot can execute the guest shell before invoking apt or any
+            // package installation command. This turns the previous vague failure
+            // into a precise extraction / ELF-loader / PRoot diagnostic.
+            val bashProbe = runProot(
+                context = context,
+                root = target,
+                extraBinds = emptyList(),
+                workingDirectory = "/root",
+                command = listOf("/bin/bash", "--version"),
+                timeoutMs = 30_000L
+            )
+            requireSuccess("اختبار تشغيل Bash داخل PRoot قبل تثبيت الحزم", bashProbe)
             val installPackages = "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git gh ca-certificates curl openssh-client python3 build-essential && apt-get clean && rm -rf /var/lib/apt/lists/*"
             val apt = runProot(
                 context = context,
@@ -233,6 +237,149 @@ object LinuxRuntimeChannel {
             throw error
         } finally {
             connection.disconnect()
+        }
+    }
+
+    /** Extracts the official rootfs with Android Toybox outside the guest PRoot. */
+    private fun runHostTar(context: Context, archive: File, destination: File): ProcessResult {
+        check(archive.isFile && archive.length() > 0L) {
+            "ملف Ubuntu Base غير موجود أو فارغ قبل فك الضغط: ${archive.absolutePath}"
+        }
+        check(File("/system/bin/toybox").isFile) {
+            "أداة Android Toybox غير موجودة في /system/bin/toybox."
+        }
+        val builder = ProcessBuilder(
+            "/system/bin/toybox", "tar", "-xzpf",
+            archive.absolutePath, "-C", destination.absolutePath
+        ).directory(context.filesDir).redirectErrorStream(true)
+        builder.environment()["TMPDIR"] = context.cacheDir.absolutePath
+
+        val process = builder.start()
+        val bytes = ByteArrayOutputStream()
+        val reader = thread(name = "termai-ubuntu-host-tar-output", isDaemon = true) {
+            try {
+                process.inputStream.use { input ->
+                    val buffer = ByteArray(4096)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        synchronized(bytes) {
+                            val remaining = (OUTPUT_LIMIT - bytes.size()).coerceAtLeast(0)
+                            if (remaining > 0) bytes.write(buffer, 0, minOf(count, remaining))
+                        }
+                    }
+                }
+            } catch (_: Throwable) {
+                // Process termination closes the pipe.
+            }
+        }
+        val finished = process.waitFor(8 * 60 * 1000L, TimeUnit.MILLISECONDS)
+        if (!finished) {
+            process.destroy()
+            if (!process.waitFor(500, TimeUnit.MILLISECONDS)) process.destroyForcibly()
+            process.waitFor()
+        }
+        reader.join(2_000)
+        val output = synchronized(bytes) { bytes.toString(Charsets.UTF_8.name()) }
+        return ProcessResult(if (finished) process.exitValue() else -1, output, !finished)
+    }
+
+    /**
+     * Validates the extracted Ubuntu ARM64 Bash ELF and its PT_INTERP loader.
+     * A missing ELF interpreter can make PRoot report that an existing Bash file
+     * is "not found", so checking only File.exists() is not sufficient.
+     */
+    private fun validateUbuntuBase(root: File) {
+        val canonicalRoot = root.canonicalFile
+        val bash = File(root, "bin/bash")
+        check(bash.exists() && bash.isFile) {
+            "اكتمل فك ضغط Ubuntu لكن /bin/bash غير موجود. افحص أرشيف Ubuntu Base وطريقة استخراج الروابط والملفات."
+        }
+        val canonicalBash = bash.canonicalFile
+        check(isUnderRoot(canonicalRoot, canonicalBash)) {
+            "مسار /bin/bash يشير إلى خارج جذر Ubuntu: ${canonicalBash.absolutePath}"
+        }
+        check(canonicalBash.canRead() && canonicalBash.canExecute()) {
+            "ملف Ubuntu /bin/bash موجود لكن صلاحيات القراءة أو التنفيذ غير كافية: ${canonicalBash.absolutePath}"
+        }
+        check(File(root, "etc/os-release").isFile) {
+            "ملف Ubuntu Base لا يحتوي على etc/os-release بعد الاستخراج."
+        }
+
+        val interpreter = readElfInterpreter(canonicalBash)
+        check(interpreter.startsWith("/")) {
+            "تعذر تحديد محمّل ELF الديناميكي لملف /bin/bash."
+        }
+        val loaderRelative = interpreter.removePrefix("/")
+        check(loaderRelative.split('/').none { it == ".." || it.isEmpty() }) {
+            "مسار محمّل ELF غير آمن داخل Ubuntu: $interpreter"
+        }
+        val loader = File(root, loaderRelative)
+        check(loader.exists() && loader.isFile) {
+            "ملف /bin/bash موجود لكن محمّل ELF المطلوب مفقود من Ubuntu: $interpreter. هذا يفسر رسالة PRoot: '/bin/bash' not found."
+        }
+        check(isUnderRoot(canonicalRoot, loader.canonicalFile)) {
+            "محمّل ELF الخاص بـ Bash يشير إلى خارج جذر Ubuntu: ${loader.canonicalPath}"
+        }
+    }
+
+    private fun isUnderRoot(root: File, candidate: File): Boolean {
+        val rootPath = root.canonicalPath
+        val candidatePath = candidate.canonicalPath
+        return candidatePath == rootPath || candidatePath.startsWith(rootPath + File.separator)
+    }
+
+    /** Reads the ELF64 little-endian AArch64 PT_INTERP path from a binary. */
+    private fun readElfInterpreter(binary: File): String {
+        RandomAccessFile(binary, "r").use { input ->
+            check(input.length() >= 64L) { "ملف Bash أقصر من ترويسة ELF64: ${binary.absolutePath}" }
+            val header = ByteArray(64)
+            input.readFully(header)
+            check(
+                header[0] == 0x7f.toByte() && header[1] == 'E'.code.toByte() &&
+                    header[2] == 'L'.code.toByte() && header[3] == 'F'.code.toByte()
+            ) { "الملف /bin/bash ليس ملف ELF صالحاً: ${binary.absolutePath}" }
+            check((header[4].toInt() and 0xff) == 2 && (header[5].toInt() and 0xff) == 1) {
+                "ملف Bash ليس ELF64 little-endian؛ لا يمكن تشغيله في بيئة ARM64 المتوقعة."
+            }
+            val headerView = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN)
+            val machine = headerView.getShort(18).toInt() and 0xffff
+            check(machine == 183) {
+                "معمارية Bash غير متوافقة: ELF e_machine=$machine، والمتوقع AArch64 (183)."
+            }
+            val programHeaderOffset = headerView.getLong(32)
+            val programHeaderSize = headerView.getShort(54).toInt() and 0xffff
+            val programHeaderCount = headerView.getShort(56).toInt() and 0xffff
+            check(
+                programHeaderOffset >= 64L && programHeaderSize >= 56 &&
+                    programHeaderCount in 1..1024 &&
+                    programHeaderOffset < input.length()
+            ) { "ترويسة ELF الخاصة بـ Bash تحتوي على جدول program headers غير صالح." }
+
+            for (index in 0 until programHeaderCount) {
+                val entryOffset = programHeaderOffset + index.toLong() * programHeaderSize
+                check(entryOffset >= 0L && entryOffset + programHeaderSize <= input.length()) {
+                    "جدول ELF الخاص بـ Bash يتجاوز نهاية الملف."
+                }
+                input.seek(entryOffset)
+                val entry = ByteArray(programHeaderSize)
+                input.readFully(entry)
+                val view = ByteBuffer.wrap(entry).order(ByteOrder.LITTLE_ENDIAN)
+                if (view.getInt(0) == 3) { // PT_INTERP
+                    val interpreterOffset = view.getLong(8)
+                    val interpreterSize = view.getLong(32)
+                    check(
+                        interpreterOffset >= 0L && interpreterSize in 2L..4096L &&
+                            interpreterOffset + interpreterSize <= input.length()
+                    ) { "مدخل PT_INTERP في ملف Bash غير صالح." }
+                    input.seek(interpreterOffset)
+                    val raw = ByteArray(interpreterSize.toInt())
+                    input.readFully(raw)
+                    val terminator = raw.indexOf(0.toByte()).let { if (it < 0) raw.size else it }
+                    return String(raw, 0, terminator, Charsets.UTF_8)
+                }
+            }
+            error("ملف Bash لا يحتوي على PT_INTERP؛ لم يتم العثور على محمّل ELF ديناميكي.")
         }
     }
 
