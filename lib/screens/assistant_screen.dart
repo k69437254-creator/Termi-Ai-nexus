@@ -35,6 +35,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
   final Set<String> _executedProjects = {};
   bool _planning = false;
   bool _executing = false;
+  bool _cancellingExecution = false;
 
   @override
   void initState() {
@@ -218,6 +219,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
     if (_executing || _pendingProjectId != project.id) return;
     setState(() {
       _executing = true;
+      _cancellingExecution = false;
       _executingProjectId = project.id;
       _pendingProjectId = null;
       _messages.add(const _ChatMessage(
@@ -264,6 +266,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
       if (mounted) {
         setState(() {
           _executing = false;
+          _cancellingExecution = false;
           _executingProjectId = null;
         });
       }
@@ -274,23 +277,42 @@ class _AssistantScreenState extends State<AssistantScreen> {
 
   Future<void> _cancelExecution() async {
     final projectId = _executingProjectId;
-    if (projectId == null) return;
+    if (projectId == null || _cancellingExecution) return;
+
+    setState(() => _cancellingExecution = true);
+
     try {
       final accepted = await widget.executionManager.cancel(projectId);
       if (!mounted) return;
+
       if (accepted) {
         setState(() => _messages.add(const _ChatMessage(
           isUser: false,
-          text: 'تم استلام طلب الإلغاء. يجري إيقاف التوليد والتراجع الآمن عن تغييرات المهمة الحالية.',
+          text: 'استلم النظام طلب الإلغاء. يجري إيقاف التوليد والتراجع الآمن عن تغييرات المهمة الحالية؛ ستتحدث حالة المهمة عند انتهاء العملية.',
         )));
+      } else {
+        setState(() {
+          _cancellingExecution = false;
+          _messages.add(const _ChatMessage(
+            isUser: false,
+            text: 'لم تقبل خدمة التنفيذ طلب الإلغاء. ما زالت حالة المشروع قيد التنفيذ.',
+            isError: true,
+          ));
+        });
       }
     } catch (error) {
-      if (mounted) setState(() => _messages.add(_ChatMessage(
-        isUser: false,
-        text: 'تعذر إرسال طلب الإلغاء: $error',
-        isError: true,
-      )));
+      if (mounted) {
+        setState(() {
+          _cancellingExecution = false;
+          _messages.add(_ChatMessage(
+            isUser: false,
+            text: 'تعذر إرسال طلب الإلغاء: $error',
+            isError: true,
+          ));
+        });
+      }
     }
+
     _persistConversation();
     _scrollToLatest();
   }
@@ -329,6 +351,8 @@ class _AssistantScreenState extends State<AssistantScreen> {
                         message: message,
                         canApprove: message.project != null && message.project!.id == _pendingProjectId,
                         executing: message.project != null && message.project!.id == _executingProjectId,
+                        cancelling: _cancellingExecution &&
+                            message.project?.id == _executingProjectId,
                         alreadyExecuted: message.project != null && _executedProjects.contains(message.project!.id),
                         onApprove: message.project == null ? null : () => _execute(message.project!),
                   onCancel: _executing && message.project?.id == _executingProjectId ? _cancelExecution : null,
@@ -445,6 +469,7 @@ class _MessageBubble extends StatelessWidget {
     required this.message,
     required this.canApprove,
     required this.executing,
+    required this.cancelling,
     required this.alreadyExecuted,
     required this.onApprove,
     this.onCancel,
@@ -453,6 +478,7 @@ class _MessageBubble extends StatelessWidget {
   final _ChatMessage message;
   final bool canApprove;
   final bool executing;
+  final bool cancelling;
   final bool alreadyExecuted;
   final VoidCallback? onApprove;
   final VoidCallback? onCancel;
@@ -507,6 +533,7 @@ class _MessageBubble extends StatelessWidget {
                   project: message.project!,
                   canApprove: canApprove,
                   executing: executing,
+                  cancelling: cancelling,
                   alreadyExecuted: alreadyExecuted,
                   onApprove: onApprove,
                   onCancel: onCancel,
@@ -521,10 +548,11 @@ class _MessageBubble extends StatelessWidget {
 }
 
 class _PlanBubble extends StatelessWidget {
-  const _PlanBubble({required this.project, required this.canApprove, required this.executing, required this.alreadyExecuted, required this.onApprove, this.onCancel});
+  const _PlanBubble({required this.project, required this.canApprove, required this.executing, required this.cancelling, required this.alreadyExecuted, required this.onApprove, this.onCancel});
   final ProjectRecord project;
   final bool canApprove;
   final bool executing;
+  final bool cancelling;
   final bool alreadyExecuted;
   final VoidCallback? onApprove;
   final VoidCallback? onCancel;
@@ -580,9 +608,17 @@ class _PlanBubble extends StatelessWidget {
               SizedBox(
                 width: double.infinity,
                 child: OutlinedButton.icon(
-                  onPressed: onCancel,
-                  icon: const Icon(Icons.stop_circle_outlined),
-                  label: const Text('إلغاء تنفيذ المشروع'),
+                  onPressed: cancelling ? null : onCancel,
+                  icon: cancelling
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.stop_circle_outlined),
+                  label: Text(
+                    cancelling ? 'يجري إلغاء التنفيذ…' : 'إلغاء تنفيذ المشروع',
+                  ),
                   style: OutlinedButton.styleFrom(foregroundColor: NexusPalette.danger),
                 ),
               )
