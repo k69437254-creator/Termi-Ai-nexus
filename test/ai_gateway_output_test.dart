@@ -12,6 +12,45 @@ void main() {
     gateway.dispose();
   });
 
+  test('accepts a project classification response', () {
+    final output = gateway.parseManagerResponse(
+      '{"type":"project","request":"Build a maps app"}',
+    );
+
+    expect(output['type'], 'project');
+    expect(output['request'], 'Build a maps app');
+  });
+
+  test('accepts a chat classification response and a JSON code fence', () {
+    final output = gateway.parseManagerResponse(
+      '```json\\n{"type":"chat","reply":"Hello"}\\n```',
+    );
+
+    expect(output['type'], 'chat');
+    expect(output['reply'], 'Hello');
+  });
+
+  test('rejects malformed manager classification responses', () {
+    expect(
+      () => gateway.parseManagerResponse(
+        '{"type":"project","request":" "}',
+      ),
+      throwsFormatException,
+    );
+
+    expect(
+      () => gateway.parseManagerResponse(
+        '{"type":"chat","reply":""}',
+      ),
+      throwsFormatException,
+    );
+
+    expect(
+      () => gateway.parseManagerResponse('{"type":"unknown"}'),
+      throwsFormatException,
+    );
+  });
+
   test('accepts a valid execution response and a JSON code fence', () {
     final output = gateway.parseAgentOutput('''
 ```json

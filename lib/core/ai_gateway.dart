@@ -316,6 +316,35 @@ class AiGateway {
     throw AiGatewayException('انتهت دورة الأدوات دون نتيجة نهائية.');
   }
 
+  Map<String, dynamic> parseManagerResponse(String raw) {
+    final decoded = _decodeJson(raw);
+    final type = decoded['type'];
+
+    if (type == 'chat') {
+      final reply = decoded['reply'];
+      if (reply is! String || reply.trim().isEmpty) {
+        throw const FormatException(
+          'Manager chat response must contain a non-empty reply.',
+        );
+      }
+      return decoded;
+    }
+
+    if (type == 'project') {
+      final request = decoded['request'];
+      if (request is! String || request.trim().isEmpty) {
+        throw const FormatException(
+          'Manager project response must contain a non-empty request.',
+        );
+      }
+      return decoded;
+    }
+
+    throw const FormatException(
+      'Manager response type must be either chat or project.',
+    );
+  }
+
   Map<String, dynamic> parseAgentOutput(String raw) {
     final decoded = _decodeJson(raw);
     final summary = decoded['summary'];

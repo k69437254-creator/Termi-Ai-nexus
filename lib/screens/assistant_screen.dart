@@ -217,12 +217,8 @@ class _AssistantScreenState extends State<AssistantScreen> {
         user: 'Conversation history:\n$history\nUSER: $requestForManager',
       );
 
-      Map<String, dynamic> result;
-      try {
-        result = widget.coordinator.gateway.parseAgentOutput(raw);
-      } on FormatException {
-        result = {};
-      }
+      final result =
+          widget.coordinator.gateway.parseManagerResponse(raw);
 
       final type = result['type']?.toString();
       final projectRequest = result['request']?.toString().trim() ?? '';
