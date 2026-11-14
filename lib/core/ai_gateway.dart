@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/services.dart';
+import 'package:uuid/uuid.dart';
 import 'memory_store.dart';
 import 'secure_vault.dart';
 import '../models/domain.dart';
@@ -21,7 +22,7 @@ class AiGateway {
   Future<String> get baseUrl => _vault.read('ai.base_url');
   Future<String> get model => _vault.read('ai.model');
 
-  Future<String> chat({required String system, required String user, String? agentId, double temperature = 0.2, bool localEngineOnly = false}) async {
+  Future<String> chat({required String system, required String user, String? agentId, double temperature = 0.2, bool localEngineOnly = false, String? requestId}) async {
     final endpoint = (await baseUrl).trim();
     final selectedModel = (await model).trim();
 
@@ -35,6 +36,7 @@ class AiGateway {
           'agentId': agentId,
           'temperature': temperature,
           'maxTokens': 512,
+          'requestId': requestId ?? const Uuid().v4(),
         });
         if (answer == null || answer.trim().isEmpty) {
           throw AiGatewayException('أعاد محرك Aram AI إجابة فارغة.');
@@ -106,6 +108,19 @@ class AiGateway {
     if (uri.path.endsWith('/chat/completions')) return uri;
     final normalized = uri.path.replaceFirst(RegExp(r'/+$'), '');
     return uri.replace(path: '$normalized/chat/completions');
+  }
+
+  Future<bool> cancelGeneration(String requestId) async {
+    try {
+      return await _embeddedEngine.invokeMethod<bool>(
+            'cancelGeneration',
+            {'requestId': requestId},
+          ) ?? false;
+    } on PlatformException catch (error) {
+      throw AiGatewayException(
+        error.message ?? 'تعذر إلغاء طلب Spark (${error.code}).',
+      );
+    }
   }
 
   Future<String> acquireProjectExecutionLease() async {

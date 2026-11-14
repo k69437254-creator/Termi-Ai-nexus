@@ -155,11 +155,20 @@ object AramEngineChannel {
                         payload.putAll(ModelFiles.downloadProgress(context))
                         result.success(payload)
                     }
+                    "cancelGeneration" -> {
+                        val requestId = call.argument<String>("requestId")
+                            ?.trim()?.takeIf { it.isNotEmpty() }
+                            ?: throw IllegalArgumentException("معرف طلب التوليد مفقود")
+                        result.success(ModelRuntime.cancelRequest(requestId))
+                    }
                     "generate" -> {
                         val user = call.argument<String>("user")?.takeIf { it.isNotBlank() }
                             ?: throw IllegalArgumentException("نص الطلب فارغ")
                         val system = call.argument<String>("system") ?: "أنت مساعد Aram AI. أجب بدقة ووضوح."
                         val maxTokens = call.argument<Int>("maxTokens") ?: 512
+                        val requestId = call.argument<String>("requestId")
+                            ?.trim()?.takeIf { it.isNotEmpty() }
+                            ?: UUID.randomUUID().toString()
                         if (!ModelRuntime.isLoaded()) {
                             if (!runCatching { ModelFiles.isModelReady(context) }.getOrDefault(false)) {
                                 throw IllegalStateException("نموذج Spark-X2.6-1.7B غير مثبت بعد. افتح مركز محرك Aram AI ونزّل النموذج أو استورده أولاً.")
@@ -184,7 +193,8 @@ object AramEngineChannel {
                                     prompt = user,
                                     systemPrompt = system,
                                     maxTokens = maxTokens,
-                                    priority = 0
+                                    priority = 0,
+                                    requestId = requestId
                                 ) { }
                                 main.post { result.success(answer) }
                             } catch (error: Throwable) {

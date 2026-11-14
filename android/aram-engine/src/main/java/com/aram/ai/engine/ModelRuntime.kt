@@ -28,6 +28,8 @@ import java.util.PriorityQueue
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.ConcurrentHashMap
+import java.util.UUID
 
 class GenerationQueueFullException(message: String = "طابور التوليد ممتلئ؛ أعد المحاولة بعد اكتمال الطلبات الحالية.") : IllegalStateException(message)
 
@@ -42,6 +44,7 @@ object ModelRuntime {
     @Volatile private var systemPromptConfigured: Boolean = false
 
     private class QueuedGeneration(
+        val requestId: String,
         val priority: Int,
         val sequence: Long,
         val prompt: String,
@@ -57,6 +60,7 @@ object ModelRuntime {
 
     private val sequence = AtomicLong(0L)
     private val executionLeases = AtomicInteger(0)
+    private val requestsById = ConcurrentHashMap<String, QueuedGeneration>()
 
     /**
      * Prevents model unloading while a project execution owns the runtime.
@@ -144,10 +148,12 @@ object ModelRuntime {
         systemPrompt: String = "أنت مساعد Aram AI. أجب بدقة ووضوح.",
         maxTokens: Int = 256,
         priority: Int = 10,
+        requestId: String = UUID.randomUUID().toString(),
         onToken: (String) -> Unit
     ): String {
         check(loaded && acceptingRequests) { "النموذج غير جاهز لاستقبال الطلبات" }
         val request = QueuedGeneration(
+            requestId = requestId,
             priority = priority.coerceIn(0, 1000),
             sequence = sequence.getAndIncrement(),
             prompt = prompt,
@@ -157,12 +163,16 @@ object ModelRuntime {
         )
         synchronized(queueMonitor) {
             check(loaded && acceptingRequests) { "المحرك يتوقف ولا يقبل طلبات جديدة" }
+            check(!requestsById.containsKey(request.requestId)) {
+                "معرف طلب التوليد مستخدم بالفعل: ${request.requestId}"
+            }
             if (pending.size >= MAX_PENDING_REQUESTS) {
                 // Priority 0 (device owner/local chat) may displace the lowest-priority
                 // waiting customer request. A request already running is never preempted.
                 val lowestPriority = pending.maxByOrNull { it.priority }
                 if (request.priority == OWNER_PRIORITY && lowestPriority != null && lowestPriority.priority > OWNER_PRIORITY) {
                     pending.remove(lowestPriority)
+                    requestsById.remove(lowestPriority.requestId, lowestPriority)
                     lowestPriority.result.completeExceptionally(
                         GenerationQueueFullException("تمت إزاحة هذا الطلب من الطابور لإعطاء أولوية لطلب المالك.")
                     )
@@ -170,6 +180,7 @@ object ModelRuntime {
                     throw GenerationQueueFullException()
                 }
             }
+            requestsById[request.requestId] = request
             pending.add(request)
         }
         schedulerWake.trySend(Unit)
@@ -182,7 +193,22 @@ object ModelRuntime {
             }
             request.result.cancel(cancelled)
             throw cancelled
+        } finally {
+            requestsById.remove(request.requestId, request)
         }
+    }
+
+    /** Cancels only the queued or active generation with this exact ID. */
+    fun cancelRequest(requestId: String): Boolean {
+        val request = requestsById[requestId] ?: return false
+        synchronized(request) {
+            if (request.result.isCompleted) return false
+            request.cancelRequested = true
+            request.result.cancel(
+                CancellationException("تم إلغاء طلب التوليد المحدد")
+            )
+        }
+        return true
     }
 
     private suspend fun drainQueue() {
