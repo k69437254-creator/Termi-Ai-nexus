@@ -13,12 +13,14 @@ import io.flutter.FlutterInjector
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.dart.DartExecutor
 import io.flutter.plugin.common.MethodChannel
+import java.util.concurrent.ConcurrentHashMap
 
 class ProjectExecutionService : Service() {
 
     private var flutterEngine: FlutterEngine? = null
     private var serviceChannel: MethodChannel? = null
     private var activeProjectId: String? = null
+    private var dartReady = false
     private var wakeLock: PowerManager.WakeLock? = null
     private val pendingProjectIds = ArrayDeque<String>()
 
@@ -42,6 +44,7 @@ class ProjectExecutionService : Service() {
             startForegroundCompat()
             acquireWakeLock()
         } catch (error: Throwable) {
+            pendingCancellationProjectIds.remove(projectId)
             stopSelf(startId)
             return START_NOT_STICKY
         }
@@ -58,6 +61,7 @@ class ProjectExecutionService : Service() {
 
     private fun startProject(projectId: String) {
         activeProjectId = projectId
+        dartReady = false
         updateNotification("يجري تنفيذ المشروع $projectId")
 
         try {
@@ -77,6 +81,21 @@ class ProjectExecutionService : Service() {
             serviceChannel = channel
 
             channel.setMethodCallHandler { call, result ->
+                if (call.method == "ready") {
+                    val readyId = call.argument<String>("projectId")?.trim()
+                    if (readyId.isNullOrEmpty() || readyId != activeProjectId) {
+                        result.error(
+                            "PROJECT_ID_MISMATCH",
+                            "معرف المشروع لا يطابق المهمة النشطة.",
+                            null
+                        )
+                        return@setMethodCallHandler
+                    }
+                    dartReady = true
+                    result.success(pendingCancellationProjectIds.remove(readyId))
+                    return@setMethodCallHandler
+                }
+
                 if (call.method != "complete") {
                     result.notImplemented()
                     return@setMethodCallHandler
@@ -123,13 +142,19 @@ class ProjectExecutionService : Service() {
         result: MethodChannel.Result
     ) {
         if (activeProjectId != projectId) {
-            result.success(false)
+            if (activeProjectId == null) {
+                pendingCancellationProjectIds.add(projectId)
+                result.success(true)
+            } else {
+                result.success(false)
+            }
             return
         }
 
         val channel = serviceChannel
-        if (channel == null) {
-            result.success(false)
+        if (!dartReady || channel == null) {
+            pendingCancellationProjectIds.add(projectId)
+            result.success(true)
             return
         }
 
@@ -163,6 +188,8 @@ class ProjectExecutionService : Service() {
     ) {
         if (activeProjectId != projectId) return
 
+        pendingCancellationProjectIds.remove(projectId)
+        dartReady = false
         updateNotification(
             if (success) "اكتمل تنفيذ المشروع $projectId"
             else "تعذر إكمال المشروع $projectId: ${error ?: "خطأ غير معروف"}"
@@ -251,7 +278,9 @@ class ProjectExecutionService : Service() {
         runCatching { flutterEngine?.destroy() }
         flutterEngine = null
         serviceChannel = null
+        activeProjectId?.let { pendingCancellationProjectIds.remove(it) }
         activeProjectId = null
+        dartReady = false
         releaseWakeLock()
         if (instance === this) instance = null
         super.onDestroy()
@@ -272,13 +301,17 @@ class ProjectExecutionService : Service() {
         @Volatile
         private var instance: ProjectExecutionService? = null
 
+        private val pendingCancellationProjectIds =
+            ConcurrentHashMap.newKeySet<String>()
+
         fun requestCancellation(
             projectId: String,
             result: MethodChannel.Result
         ) {
             val service = instance
             if (service == null) {
-                result.success(false)
+                pendingCancellationProjectIds.add(projectId)
+                result.success(true)
             } else {
                 service.cancelProject(projectId, result)
             }

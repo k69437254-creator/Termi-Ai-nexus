@@ -53,6 +53,16 @@ Future<void> projectExecutionEntrypoint(List<String> args) async {
       throw StateError('معرف المشروع غير متوفر.');
     }
 
+    final cancellationPending =
+        await _projectExecutionServiceChannel.invokeMethod<bool>(
+      'ready',
+      <String, Object?>{'projectId': projectId},
+    );
+    if (cancellationPending == null) {
+      throw StateError('لم تؤكد خدمة Android جاهزية استقبال أوامر المشروع.');
+    }
+    if (cancellationPending) control.cancelRequested = true;
+
     final projects = await coordinator.listProjects();
     ProjectRecord? project;
 
