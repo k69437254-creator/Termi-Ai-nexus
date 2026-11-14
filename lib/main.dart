@@ -22,6 +22,7 @@ Future<void> projectExecutionEntrypoint(List<String> args) async {
 
   var success = false;
   String? errorMessage;
+  ProjectRecord? project;
 
   _projectExecutionServiceChannel.setMethodCallHandler((call) async {
     if (call.method != 'cancel') {
@@ -64,7 +65,6 @@ Future<void> projectExecutionEntrypoint(List<String> args) async {
     if (cancellationPending) control.cancelRequested = true;
 
     final projects = await coordinator.listProjects();
-    ProjectRecord? project;
 
     for (final item in projects) {
       if (item.id == projectId) {
@@ -99,6 +99,47 @@ Future<void> projectExecutionEntrypoint(List<String> args) async {
     }
   } catch (error) {
     errorMessage = error.toString();
+
+    try {
+      ProjectRecord? failedProject = project;
+
+      if (failedProject == null && projectId.isNotEmpty) {
+        final savedProjects = await coordinator.listProjects();
+        for (final saved in savedProjects) {
+          if (saved.id == projectId) {
+            failedProject = saved;
+            break;
+          }
+        }
+      }
+
+      if (failedProject != null) {
+        var changed = false;
+
+        for (final task in failedProject.tasks) {
+          if (task.status == TaskStatus.running) {
+            task.status = TaskStatus.interrupted;
+            task.result =
+                'توقف التنفيذ بسبب خطأ قبل اكتمال المهمة. '
+                'لم تُعد المهمة تلقائياً لتجنب تكرار آثار جانبية؛ '
+                'يلزم فحص حالتها قبل الاستئناف.';
+            changed = true;
+          } else if (task.status == TaskStatus.pending) {
+            task.status = TaskStatus.interrupted;
+            task.result =
+                'لم تبدأ هذه المهمة لأن تنفيذ المشروع توقف بسبب خطأ سابق.';
+            changed = true;
+          }
+        }
+
+        if (changed) {
+          await coordinator.save(failedProject);
+        }
+      }
+    } catch (recoveryError) {
+      errorMessage =
+          '$errorMessage | تعذر حفظ حالة التعافي: $recoveryError';
+    }
   } finally {
     _projectExecutionServiceChannel.setMethodCallHandler(null);
     coordinator.gateway.dispose();
