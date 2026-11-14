@@ -399,11 +399,36 @@ class ProjectWorkspace {
     };
   }
 
+  bool _isSensitivePathSegment(String segment) {
+    final name = segment.toLowerCase();
+    const exact = {
+      '.env', '.npmrc', '.pypirc', '.netrc',
+      '.git-credentials', 'google-services.json',
+    };
+    const extensions = {
+      '.pem', '.p12', '.pfx', '.jks', '.keystore',
+      '.key', '.gpg', '.asc',
+    };
+    final secret = RegExp(
+      r'(^|[._-])(secret|secrets|credential|credentials|token|password|private|apikey|api_key|auth|service-account)([._-]|$)',
+      caseSensitive: false,
+    );
+    return exact.contains(name) ||
+        name.startsWith('.env.') ||
+        name.startsWith('id_rsa') ||
+        name.startsWith('id_ed25519') ||
+        extensions.any(name.endsWith) ||
+        secret.hasMatch(name);
+  }
+
   Future<String> readTextFile(String relativePath) async {
     if (!ApprovalPolicy.validRelativePath(relativePath)) {
       throw FormatException('Rejected unsafe path: $relativePath');
     }
     final normalized = p.normalize(relativePath.replaceAll('\\', '/'));
+    if (normalized.split('/').any(_isSensitivePathSegment)) {
+      throw FormatException('Reading sensitive files is forbidden: $relativePath');
+    }
     final target = p.normalize(p.join(rootPath, normalized));
     if (!p.isWithin(rootPath, target)) {
       throw FormatException('Path escaped workspace: $relativePath');

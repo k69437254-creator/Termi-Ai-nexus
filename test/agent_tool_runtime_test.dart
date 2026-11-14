@@ -41,6 +41,12 @@ void main() {
     expect(result['ok'], isFalse);
   });
 
+  test('blocks reading sensitive environment files', () async {
+    await File('${root.path}/.env').writeAsString('API_KEY=private-value');
+    final result = await runtime.execute('read_file', {'path': '.env'});
+    expect(result['ok'], isFalse);
+  });
+
   test('rejects binary files', () async {
     await File('${root.path}/binary.bin').writeAsBytes([0, 1, 2, 0]);
     final result = await runtime.execute('read_file', {'path': 'binary.bin'});
