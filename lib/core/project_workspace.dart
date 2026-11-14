@@ -215,6 +215,36 @@ class ProjectWorkspace {
     return output.toString();
   }
 
+  Future<String> readTextFile(String relativePath) async {
+    if (!ApprovalPolicy.validRelativePath(relativePath)) {
+      throw FormatException('Rejected unsafe path: $relativePath');
+    }
+    final normalized = p.normalize(relativePath.replaceAll('\\', '/'));
+    final target = p.normalize(p.join(rootPath, normalized));
+    if (!p.isWithin(rootPath, target)) {
+      throw FormatException('Path escaped workspace: $relativePath');
+    }
+    var cursor = rootPath;
+    for (final segment in normalized.split('/')) {
+      cursor = p.join(cursor, segment);
+      if (await FileSystemEntity.type(cursor, followLinks: false) ==
+          FileSystemEntityType.link) {
+        throw FormatException('Symlink access is forbidden: $relativePath');
+      }
+    }
+    final file = File(target);
+    if (await FileSystemEntity.type(target, followLinks: false) !=
+        FileSystemEntityType.file) {
+      throw FileSystemException('File not found or not regular', target);
+    }
+    if (await file.length() > 128 * 1024) {
+      throw FormatException('File exceeds the 128 KB read limit');
+    }
+    final bytes = await file.readAsBytes();
+    if (bytes.contains(0)) throw FormatException('Binary files are not readable');
+    return utf8.decode(bytes);
+  }
+
   Future<bool> verifyFiles(Map<String, String> expectedContents) async {
     if (expectedContents.isEmpty) return false;
     for (final entry in expectedContents.entries) {

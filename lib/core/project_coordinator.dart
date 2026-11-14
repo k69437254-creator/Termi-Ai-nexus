@@ -2,6 +2,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 import '../models/domain.dart';
+import 'agent_tool_runtime.dart';
 import 'ai_gateway.dart';
 import 'memory_store.dart';
 import 'project_job_store.dart';
@@ -109,6 +110,7 @@ class ProjectCoordinator {
               workspaceContext: workspaceContext,
               memory: memory,
               requestId: requestId,
+              toolRuntime: AgentToolRuntime(workspace),
             );
             if (executionControl.requestId == requestId) {
               executionControl.requestId = null;

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'agent_tool_runtime.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter/services.dart';
 import 'package:uuid/uuid.dart';
@@ -197,16 +198,49 @@ class AiGateway {
     return tasks;
   }
 
-  Future<String> executeTask({required String agentId, required String taskTitle, required String taskDescription, required String projectId, required String workspaceContext, required MemoryStore memory, required String requestId}) async {
+  Future<String> executeTask({
+    required String agentId,
+    required String taskTitle,
+    required String taskDescription,
+    required String projectId,
+    required String workspaceContext,
+    required MemoryStore memory,
+    required String requestId,
+    required AgentToolRuntime toolRuntime,
+  }) async {
     final context = await memory.contextFor(agentId: agentId, projectId: projectId);
-    return chat(
-      agentId: agentId,
-      localEngineOnly: true,
-      system: 'أنت وكيل متخصص في فريق TermiAI-Nexus. أخرج JSON فقط بالشكل {"summary":"...","files":[{"path":"relative/path","content":"full file content"}],"verification":["..."],"risks":[]}. الملفات نصوص كاملة وليست diff. لا تستخدم مسارات مطلقة ولا .. ولا تنفذ أوامر. يجب أن تتضمن files ملفاً واحداً على الأقل بتغيير فعلي؛ لا تُعد مصفوفة فارغة أو محتوى مطابقاً لملف قائم. إذا تعذر إجراء تغيير فعلي، اشرح العائق في summary ولا تدّع النجاح. لا تختلق نتائج اختبار. السياق:\n$context',
-      user: 'المهمة: $taskTitle\nالتفاصيل: $taskDescription\nأنت تعمل داخل مساحة مشروع معزولة. قدّم ملفات كاملة صغيرة ومتماسكة فقط عند الحاجة.\n\n$workspaceContext',
-      temperature: 0.15,
-      requestId: requestId,
-    );
+    final system = 'أنت وكيل برمجي في TermiAI-Nexus. يمكنك طلب قراءة ملف واحد في كل استدعاء بإخراج JSON بالشكل {"tool_call":{"name":"read_file","arguments":{"path":"relative/path"}}}. لا تطلب إلا الملفات اللازمة. بعد تلقي نتيجة الأداة أعد JSON نهائياً بالشكل {"summary":"...","files":[{"path":"relative/path","content":"full file content"}],"verification":["..."],"risks":[]}. لا تضع نصاً خارج JSON، ولا تختلق نتائج اختبار.';
+    var conversation = 'السياق والذاكرة:\n$context\n\nالمهمة: $taskTitle\n$taskDescription\n\nسياق مساحة العمل:\n$workspaceContext';
+    for (var call = 0; call <= 4; call++) {
+      final raw = await chat(
+        agentId: agentId,
+        localEngineOnly: true,
+        system: system,
+        user: conversation,
+        temperature: 0.15,
+        requestId: requestId,
+      );
+      final decoded = _decodeJson(raw);
+      final toolCall = decoded['tool_call'];
+      if (toolCall == null) {
+        parseAgentOutput(raw);
+        return raw;
+      }
+      if (call == 4) {
+        throw AiGatewayException('تجاوز الوكيل الحد الأقصى لاستدعاءات الأدوات (4).');
+      }
+      if (toolCall is! Map ||
+          toolCall['name'] is! String ||
+          toolCall['arguments'] is! Map) {
+        throw const FormatException('صيغة استدعاء الأداة غير صالحة.');
+      }
+      final result = await toolRuntime.execute(
+        toolCall['name'] as String,
+        Map<String, dynamic>.from(toolCall['arguments'] as Map),
+      );
+      conversation = '$conversation\n\nنتيجة الأداة:\n${jsonEncode(result)}\n\nتابع المهمة، ويمكنك طلب قراءة أخرى أو إرجاع النتيجة النهائية.';
+    }
+    throw AiGatewayException('انتهت دورة الأدوات دون نتيجة نهائية.');
   }
 
   Map<String, dynamic> parseAgentOutput(String raw) {
