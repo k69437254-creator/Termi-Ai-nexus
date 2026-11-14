@@ -1,5 +1,6 @@
 import 'package:material_ui/material_ui.dart';
 
+import '../core/nexus_feature_suite.dart';
 import '../core/nexus_theme.dart';
 import '../core/project_coordinator.dart';
 import '../core/project_execution_manager.dart';
@@ -36,6 +37,8 @@ class _AssistantScreenState extends State<AssistantScreen> {
   bool _planning = false;
   bool _executing = false;
   bool _cancellingExecution = false;
+  bool _mediaBusy = false;
+  NexusImagePayload? _pendingImage;
 
   @override
   void initState() {
@@ -120,9 +123,52 @@ class _AssistantScreenState extends State<AssistantScreen> {
   }
 
 
+  Future<void> _pickImage() async {
+    if (_planning || _executing || _mediaBusy) return;
+    setState(() => _mediaBusy = true);
+    try {
+      final image = await NexusDeviceServices.pickImage();
+      if (!mounted || image == null) return;
+      setState(() => _pendingImage = image);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تم إرفاق صورة (${(image.sizeBytes / 1024).round()} KB).')),
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('تعذر إرفاق الصورة: $error')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _mediaBusy = false);
+    }
+  }
+
+  Future<void> _voiceInput() async {
+    if (_planning || _executing || _mediaBusy) return;
+    setState(() => _mediaBusy = true);
+    try {
+      final transcript = await NexusDeviceServices.recognizeSpeech();
+      if (!mounted || transcript == null) return;
+      final previous = _request.text.trim();
+      _request.text = previous.isEmpty ? transcript : '$previous\n$transcript';
+      _request.selection = TextSelection.collapsed(offset: _request.text.length);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('تعذر تحويل الصوت إلى نص: $error')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _mediaBusy = false);
+    }
+  }
+
   Future<void> _submit() async {
-    final prompt = _request.text.trim();
-    if (prompt.isEmpty || _planning || _executing) return;
+    final selectedImage = _pendingImage;
+    final typedPrompt = _request.text.trim();
+    if ((typedPrompt.isEmpty && selectedImage == null) || _planning || _executing || _mediaBusy) return;
+    final prompt = typedPrompt.isEmpty ? 'حلّل الصورة المرفقة وحدد ما الذي يظهر فيها.' : typedPrompt;
 
     final previousMessages = _messages
         .where((message) => message.text.trim().isNotEmpty)
@@ -131,13 +177,24 @@ class _AssistantScreenState extends State<AssistantScreen> {
     _request.clear();
     setState(() {
       _planning = true;
+      _pendingImage = null;
       _pendingProjectId = null;
-      _messages.add(_ChatMessage(isUser: true, text: prompt));
+      _messages.add(_ChatMessage(isUser: true, text: selectedImage == null ? prompt : '$prompt\n[صورة مرفقة]'));
     });
     _persistConversation();
     _scrollToLatest();
 
     try {
+      var requestForManager = prompt;
+      if (selectedImage != null) {
+        final imageDescription = await widget.coordinator.gateway.describeImage(
+          base64: selectedImage.base64,
+          mimeType: selectedImage.mimeType,
+          prompt: typedPrompt.isEmpty ? 'صف الصورة والعناصر والنصوص الظاهرة فيها.' : typedPrompt,
+          agentId: 'manager',
+        );
+        requestForManager += '\n\nتحليل الصورة المرفقة:\n$imageDescription';
+      }
       final history = previousMessages
           .skip(previousMessages.length > 12 ? previousMessages.length - 12 : 0)
           .map((message) =>
@@ -157,7 +214,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
             'Do not classify questions, greetings, explanations, or casual '
             'discussion as projects. Reply in the same language as the user. '
             'Do not claim that any task has been executed.',
-        user: 'Conversation history:\n$history\nUSER: $prompt',
+        user: 'Conversation history:\n$history\nUSER: $requestForManager',
       );
 
       Map<String, dynamic> result;
@@ -409,6 +466,16 @@ class _AssistantScreenState extends State<AssistantScreen> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
+              IconButton(
+                tooltip: _pendingImage == null ? 'إرفاق صورة للتحليل' : 'تغيير الصورة المرفقة',
+                onPressed: _planning || _executing || _mediaBusy ? null : _pickImage,
+                icon: Icon(Icons.image_outlined, color: _pendingImage == null ? NexusPalette.muted : NexusPalette.primaryLight),
+              ),
+              IconButton(
+                tooltip: 'تحويل الصوت العربي إلى نص',
+                onPressed: _planning || _executing || _mediaBusy ? null : _voiceInput,
+                icon: const Icon(Icons.mic_none_rounded),
+                ),
               Expanded(
                 child: TextField(
                   controller: _request,
@@ -418,8 +485,8 @@ class _AssistantScreenState extends State<AssistantScreen> {
                   onSubmitted: (_) => _submit(),
                   enabled: !_planning && !_executing,
                   decoration: InputDecoration(
-                    hintText: _executing ? 'الفريق ينفذ الخطة المعتمدة…' : 'اكتب رسالتك أو فكرة مشروعك…',
-                    prefixIcon: const Icon(Icons.add_circle_outline_rounded, size: 20),
+                    hintText: _executing ? 'الفريق ينفذ الخطة المعتمدة…' : (_pendingImage == null ? 'اكتب رسالتك أو فكرة مشروعك…' : 'الصورة جاهزة للتحليل؛ اكتب طلبك…'),
+                    prefixIcon: const Icon(Icons.chat_bubble_outline_rounded, size: 20),
                     filled: true,
                     fillColor: NexusPalette.elevated.withValues(alpha: 0.92),
                     contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13),

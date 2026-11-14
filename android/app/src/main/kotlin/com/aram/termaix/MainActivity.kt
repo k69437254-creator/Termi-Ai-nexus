@@ -29,6 +29,7 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         AramEngineChannel.register(flutterEngine, applicationContext, this)
         AgentCommandChannel.register(flutterEngine, applicationContext)
+        NexusDeviceChannel.register(flutterEngine, this)
 
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL).setStreamHandler(object : EventChannel.StreamHandler {
             override fun onListen(arguments: Any?, events: EventChannel.EventSink?) { eventSink = events }
@@ -118,7 +119,9 @@ class MainActivity : FlutterActivity() {
     @Deprecated("Deprecated in Android API; retained for Flutter document-picker compatibility")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        AramEngineChannel.onActivityResult(requestCode, resultCode, data)
+        if (!NexusDeviceChannel.onActivityResult(requestCode, resultCode, data)) {
+            AramEngineChannel.onActivityResult(requestCode, resultCode, data)
+        }
     }
 
     override fun onDestroy() {

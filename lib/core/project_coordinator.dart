@@ -8,6 +8,7 @@ import 'ai_gateway.dart';
 import 'memory_store.dart';
 import 'project_job_store.dart';
 import 'project_workspace.dart';
+import 'nexus_feature_suite.dart';
 
 class ProjectExecutionControl {
   bool cancelRequested = false;
@@ -220,6 +221,18 @@ class ProjectCoordinator {
           break;
         }
         onTaskChanged?.call(task);
+      }
+      if (project.tasks.isNotEmpty &&
+          project.tasks.every((task) => task.status == TaskStatus.completed)) {
+        try {
+          await NexusDocumentationGenerator.generate(
+            project.workspacePath,
+            projectName: project.name,
+          );
+        } catch (documentationError) {
+          project.tasks.last.result +=
+              '\nتعذر إنشاء الدليل الآلي: $documentationError';
+        }
       }
       final all = await listProjects();
       final index = all.indexWhere((e) => e.id == project.id);

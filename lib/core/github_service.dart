@@ -50,6 +50,57 @@ class GitHubService {
     return data;
   }
 
+  Future<List<Map<String, dynamic>>> workflowRuns({
+    required String owner,
+    required String repo,
+    required String branch,
+  }) async {
+    final safePart = RegExp(r'^[A-Za-z0-9_.-]{1,100}$');
+    if (!safePart.hasMatch(owner) || !safePart.hasMatch(repo) || branch.trim().isEmpty) {
+      throw FormatException('Invalid GitHub workflow query.');
+    }
+    final uri = Uri.https('api.github.com', '/repos/$owner/$repo/actions/runs', {
+      'branch': branch,
+      'per_page': '20',
+    });
+    final response = await _client.get(uri, headers: await _headers());
+    final data = _decode(response);
+    if (data is! Map || data['workflow_runs'] is! List) {
+      throw const FormatException('Unexpected GitHub workflow-runs response.');
+    }
+    return (data['workflow_runs'] as List)
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList(growable: false);
+  }
+
+  Future<void> dispatchWorkflow({
+    required String owner,
+    required String repo,
+    required String workflow,
+    required String ref,
+  }) async {
+    final safePart = RegExp(r'^[A-Za-z0-9_.-]{1,100}$');
+    if (!safePart.hasMatch(owner) || !safePart.hasMatch(repo) ||
+        !RegExp(r'^[A-Za-z0-9_.-]+\.ya?ml$').hasMatch(workflow) ||
+        ref.trim().isEmpty) {
+      throw FormatException('Invalid GitHub workflow dispatch arguments.');
+    }
+    final uri = Uri.https(
+      'api.github.com',
+      '/repos/$owner/$repo/actions/workflows/$workflow/dispatches',
+    );
+    final response = await _client.post(
+      uri,
+      headers: await _headers(),
+      body: jsonEncode({'ref': ref}),
+    );
+    if (response.statusCode != 204) {
+      _decode(response);
+      throw Exception('GitHub workflow dispatch failed (${response.statusCode}).');
+    }
+  }
+
   dynamic _decode(http.Response response) {
     dynamic body;
     try { body = jsonDecode(response.body); } catch (_) { body = response.body; }

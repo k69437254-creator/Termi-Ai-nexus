@@ -94,6 +94,79 @@ class AiGateway {
     }
   }
 
+  Future<String> describeImage({
+    required String base64,
+    required String mimeType,
+    required String prompt,
+    String? agentId,
+  }) async {
+    if (base64.isEmpty || base64.length > 12 * 1024 * 1024) {
+      throw AiGatewayException('حجم الصورة فارغ أو يتجاوز الحد المسموح.');
+    }
+    if (!const {
+      'image/jpeg', 'image/png', 'image/webp', 'image/gif'
+    }.contains(mimeType)) {
+      throw AiGatewayException('صيغة الصورة غير مدعومة: $mimeType');
+    }
+    final endpoint = (await baseUrl).trim();
+    final selectedModel = (await model).trim();
+    if (endpoint.isEmpty || _shouldUseEmbeddedEngine(endpoint)) {
+      throw AiGatewayException(
+        'فهم الصور يحتاج بوابة خارجية ونموذجاً متعدد الوسائط. محرك Spark المحلي الحالي نصّي فقط.',
+      );
+    }
+    if (selectedModel.isEmpty) throw AiGatewayException('أدخل اسم نموذج Vision في الإعدادات.');
+    final masterKey = await _vault.read('ai.owner_key');
+    final agentKey = agentId == null ? '' : await _vault.read('ai.agent.$agentId.key');
+    final key = agentKey.trim().isNotEmpty ? agentKey.trim() : masterKey.trim();
+    if (key.isEmpty) throw AiGatewayException('لا يوجد مفتاح API للبوابة الخارجية.');
+
+    http.Response response;
+    try {
+      response = await _client.post(
+        _completionUri(endpoint),
+        headers: {
+          'Authorization': 'Bearer $key',
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: jsonEncode({
+          'model': selectedModel,
+          'temperature': 0.1,
+          'messages': [
+            {'role': 'system', 'content': 'حلل الصورة بدقة. ميّز بين ما يظهر بوضوح وما لا يمكن الجزم به. لا تخمّن النصوص غير المقروءة.'},
+            {
+              'role': 'user',
+              'content': [
+                {'type': 'text', 'text': prompt},
+                {'type': 'image_url', 'image_url': {'url': 'data:$mimeType;base64,$base64'}},
+              ],
+            },
+          ],
+        }),
+      ).timeout(const Duration(seconds: 90));
+    } catch (error) {
+      throw AiGatewayException('تعذر إرسال الصورة إلى نموذج Vision: $error');
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw AiGatewayException('استجابة Vision غير ناجحة (${response.statusCode}): ${_trim(response.body, 500)}');
+    }
+    try {
+      final payload = jsonDecode(response.body) as Map<String, dynamic>;
+      final choices = payload['choices'] as List?;
+      final message = choices?.isNotEmpty == true ? (choices!.first as Map)['message'] : null;
+      final content = message is Map ? message['content'] : null;
+      if (content is String && content.trim().isNotEmpty) return content.trim();
+      if (content is List) {
+        final value = content.whereType<Map>().map((item) => item['text']?.toString() ?? '').join('\n').trim();
+        if (value.isNotEmpty) return value;
+      }
+      throw const FormatException('Missing vision response content.');
+    } catch (error) {
+      throw AiGatewayException('صيغة استجابة Vision غير متوافقة: $error');
+    }
+  }
+
   bool _shouldUseEmbeddedEngine(String endpoint) {
     if (endpoint.trim().isEmpty) return true;
     final uri = Uri.tryParse(endpoint);

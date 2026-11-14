@@ -9,6 +9,7 @@ import 'screens/control_screen.dart';
 import 'screens/engine_center_screen.dart';
 import 'screens/github_screen.dart';
 import 'screens/office_screen.dart';
+import 'screens/nexus_feature_lab_screen.dart';
 import 'screens/projects_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/terminal_screen.dart';
@@ -39,6 +40,7 @@ class _AppShellState extends State<AppShell> {
         6 => const AgentsScreen(),
         7 => const SettingsScreen(),
         8 => const EngineCenterScreen(),
+        9 => NexusFeatureLabScreen(coordinator: _coordinator),
         _ => OfficeScreen(onOpenAssistant: _openAssistant),
       };
 
@@ -54,6 +56,7 @@ class _AppShellState extends State<AppShell> {
         'فريق الوكلاء',
         'الإعدادات',
         'محرك Aram AI',
+        'مختبر Nexus',
       ][_selected];
 
   Widget _buildHeader(BuildContext context) => Padding(
@@ -189,6 +192,7 @@ class _AppShellState extends State<AppShell> {
           const NavigationDrawerDestination(icon: Icon(Icons.groups_2_outlined), selectedIcon: Icon(Icons.groups_2_rounded), label: Text('فريق الوكلاء والذاكرة')),
           const NavigationDrawerDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings_rounded), label: Text('الإعدادات')),
           const NavigationDrawerDestination(icon: Icon(Icons.memory_outlined), selectedIcon: Icon(Icons.memory_rounded), label: Text('محرك Aram AI')),
+          const NavigationDrawerDestination(icon: Icon(Icons.science_outlined), selectedIcon: Icon(Icons.science_rounded), label: Text('مختبر Nexus')),
           const SizedBox(height: 18),
         ],
       );
