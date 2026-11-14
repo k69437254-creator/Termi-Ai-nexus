@@ -447,6 +447,7 @@ class _MessageBubble extends StatelessWidget {
     required this.executing,
     required this.alreadyExecuted,
     required this.onApprove,
+    this.onCancel,
   });
 
   final _ChatMessage message;
@@ -454,6 +455,7 @@ class _MessageBubble extends StatelessWidget {
   final bool executing;
   final bool alreadyExecuted;
   final VoidCallback? onApprove;
+  final VoidCallback? onCancel;
 
   @override
   Widget build(BuildContext context) {
@@ -507,6 +509,7 @@ class _MessageBubble extends StatelessWidget {
                   executing: executing,
                   alreadyExecuted: alreadyExecuted,
                   onApprove: onApprove,
+                  onCancel: onCancel,
                 ),
               ],
             ],
