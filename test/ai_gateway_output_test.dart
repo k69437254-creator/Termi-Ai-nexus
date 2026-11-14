@@ -23,7 +23,7 @@ void main() {
 
   test('accepts a chat classification response and a JSON code fence', () {
     final output = gateway.parseManagerResponse(
-      '```json\\n{"type":"chat","reply":"Hello"}\\n```',
+      '```json\n{"type":"chat","reply":"Hello"}\n```',
     );
 
     expect(output['type'], 'chat');
