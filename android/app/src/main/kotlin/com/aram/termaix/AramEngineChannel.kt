@@ -37,6 +37,16 @@ object AramEngineChannel {
             val keyStore by lazy { ApiKeyStore(context) }
             try {
                 when (call.method) {
+                    "startProjectExecution" -> {
+                        val projectId = call.argument<String>("projectId")
+                            ?.trim()?.takeIf { it.isNotEmpty() }
+                            ?: throw IllegalArgumentException("معرف المشروع مفقود")
+                        context.startForegroundService(
+                            Intent(context, ProjectExecutionService::class.java)
+                                .putExtra(ProjectExecutionService.EXTRA_PROJECT_ID, projectId)
+                        )
+                        result.success(true)
+                    }
                     "start" -> {
                         context.startForegroundService(Intent(context, AramEngineService::class.java).setAction(AramEngineService.ACTION_START))
                         result.success(true)
