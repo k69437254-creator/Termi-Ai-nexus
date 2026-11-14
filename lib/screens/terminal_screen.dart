@@ -109,8 +109,21 @@ class _TerminalScreenState extends State<TerminalScreen> {
           _output.write('[PASS] git and gh are available inside the Linux guest.\n');
         }
       });
-    } catch (error) {
-      if (mounted) setState(() => _status = 'فشل تهيئة Ubuntu: $error');
+    } catch (error, stackTrace) {
+      if (mounted) {
+        setState(() {
+          _status = 'فشل تهيئة Ubuntu؛ راجع سجل الطرفية للتفاصيل';
+          _output
+            ..write('\n[LINUX INSTALL FAILED]\n')
+            ..write('$error\n')
+            ..write('$stackTrace\n');
+        });
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_scroll.hasClients) {
+            _scroll.jumpTo(_scroll.position.maxScrollExtent);
+          }
+        });
+      }
     } finally {
       if (mounted) setState(() => _installingLinux = false);
     }

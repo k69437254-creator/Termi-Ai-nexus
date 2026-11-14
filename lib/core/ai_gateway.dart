@@ -23,7 +23,7 @@ class AiGateway {
   Future<String> get baseUrl => _vault.read('ai.base_url');
   Future<String> get model => _vault.read('ai.model');
 
-  Future<String> chat({required String system, required String user, String? agentId, double temperature = 0.2, bool localEngineOnly = false, String? requestId}) async {
+  Future<String> chat({required String system, required String user, String? agentId, double temperature = 0.2, bool localEngineOnly = false, int maxTokens = 512, String? requestId}) async {
     final endpoint = (await baseUrl).trim();
     final selectedModel = (await model).trim();
 
@@ -36,7 +36,7 @@ class AiGateway {
           'user': user,
           'agentId': agentId,
           'temperature': temperature,
-          'maxTokens': 512,
+          'maxTokens': maxTokens,
           'requestId': requestId ?? const Uuid().v4(),
         });
         if (answer == null || answer.trim().isEmpty) {
@@ -228,44 +228,85 @@ class AiGateway {
 
   Future<List<PlanTask>> createPlan(String request, String projectId, MemoryStore memory) async {
     final teamMemory = await memory.contextFor(agentId: 'manager', projectId: projectId);
-    final result = await chat(
-      agentId: 'manager', temperature: 0.15,
+    const system = 'أنت المدير الرئيسي في TermiAI-Nexus. حوّل طلب المستخدم إلى خطة تنفيذ عملية ومتسلسلة. أعد كائن JSON فقط دون Markdown أو شرح خارجه، بالشكل {"tasks":[{"id":"t1","title":"عنوان واضح","description":"تعليمات تنفيذ مفصلة ومحددة","agentId":"architect|developer|qa|security","risk":"low|medium|high"}]}. يجب أن تحتوي الخطة من 3 إلى 8 مهام. اجعل الخطة من 3 مهام للطلبات البسيطة، وزد العدد عند الحاجة فقط. اجعل كل مهمة قابلة للتنفيذ وتنتج ملفات فعلية عند التنفيذ. استخدم معرفات فريدة، ولا تدّع أن أي شيء نُفذ. لا تضع أوامر خطرة.';
+    final firstResponse = await chat(
+      agentId: 'manager',
+      temperature: 0.1,
       localEngineOnly: true,
-      system: 'أنت المدير الرئيسي في TermiAI-Nexus. حلل طلب تطوير برمجي وحوله إلى خطة عملية متسلسلة. أعد JSON فقط بالشكل {"tasks":[{"id":"t1","title":"...","description":"...","agentId":"architect|developer|qa|security","risk":"low|medium|high"}]}. لا تدّع تنفيذ أي شيء. لا تضع أوامر خطرة. استخدم 3 إلى 8 مهام. السياق:\n$teamMemory',
+      maxTokens: 1536,
+      system: '$system\nسياق الفريق:\n$teamMemory',
       user: request,
     );
-    final decoded = _decodeJson(result);
+    try {
+      return parseProjectPlanResponse(firstResponse);
+    } on FormatException catch (firstError) {
+      final retryResponse = await chat(
+        agentId: 'manager',
+        temperature: 0.05,
+        localEngineOnly: true,
+        maxTokens: 1536,
+        system: '$system\nالاستجابة السابقة رُفضت بسبب: ${firstError.message}. أعد بناء JSON صحيحاً ومكتملاً، ولا تكرر الخطأ.',
+        user: 'طلب المستخدم:\n$request\n\nالاستجابة السابقة التي تحتاج إلى تصحيح:\n${_trim(firstResponse, 1800)}',
+      );
+      try {
+        return parseProjectPlanResponse(retryResponse);
+      } on FormatException catch (retryError) {
+        throw AiGatewayException(
+          'تعذر إعداد خطة صالحة بعد محاولتين. سبب الرفض الأول: ${firstError.message}. سبب الرفض الثاني: ${retryError.message}.',
+        );
+      }
+    }
+  }
+
+  /// Parses and validates the manager's project plan independently of the AI engine.
+  /// Exposed so the exact response contract can be covered by unit tests.
+  List<PlanTask> parseProjectPlanResponse(String raw) {
+    final decoded = _decodeJson(raw);
     final items = decoded['tasks'];
     if (items is! List || items.length < 3 || items.length > 8) {
-      throw AiGatewayException('يجب أن تتضمن الخطة من ثلاث إلى ثماني مهام صالحة.');
+      throw const FormatException('Project plan must contain between 3 and 8 tasks.');
     }
-    final tasks = <PlanTask>[];
+
+    const allowedAgents = {'architect', 'developer', 'qa', 'security'};
+    const allowedRisks = {'low', 'medium', 'high'};
+    const requiredFields = ['id', 'title', 'description', 'agentId', 'risk'];
     final seenIds = <String>{};
+    final tasks = <PlanTask>[];
+
     for (final item in items) {
-      if (item is! Map) throw AiGatewayException('تحتوي الخطة على مهمة ليست كائن JSON صالحاً.');
+      if (item is! Map) {
+        throw const FormatException('Every project task must be a JSON object.');
+      }
       final data = Map<String, dynamic>.from(item);
-      for (final field in const ['id', 'title', 'description', 'agentId', 'risk']) {
+      for (final field in requiredFields) {
         final value = data[field];
         if (value is! String || value.trim().isEmpty) {
-          throw AiGatewayException('حقل $field مفقود أو فارغ في إحدى مهام الخطة.');
+          throw FormatException('Project task field $field is missing or empty.');
         }
       }
-      const allowedAgents = {'architect', 'developer', 'qa', 'security'};
-      const allowedRisks = {'low', 'medium', 'high'};
-      if (!allowedAgents.contains(data['agentId'])) {
-        throw AiGatewayException('معرّف الوكيل غير صالح في إحدى مهام الخطة.');
+
+      final id = (data['id'] as String).trim();
+      final title = (data['title'] as String).trim();
+      final description = (data['description'] as String).trim();
+      final agentId = (data['agentId'] as String).trim();
+      final risk = (data['risk'] as String).trim();
+
+      if (!allowedAgents.contains(agentId)) {
+        throw const FormatException('Project task has an unsupported agentId.');
       }
-      if (!allowedRisks.contains(data['risk'])) {
-        throw AiGatewayException('مستوى المخاطر غير صالح في إحدى مهام الخطة.');
+      if (!allowedRisks.contains(risk)) {
+        throw const FormatException('Project task has an unsupported risk value.');
       }
-      final task = PlanTask.fromJson(data);
-      if (!seenIds.add(task.id)) throw AiGatewayException('تحتوي الخطة على معرفات مهام مكررة: ${task.id}');
+      if (!seenIds.add(id)) {
+        throw FormatException('Project plan contains duplicate task id: $id');
+      }
+
       tasks.add(PlanTask(
-        id: task.id,
-        title: task.title,
-        description: task.description,
-        agentId: task.agentId,
-        risk: task.risk,
+        id: id,
+        title: title,
+        description: description,
+        agentId: agentId,
+        risk: risk,
       ));
     }
     return tasks;

@@ -51,6 +51,53 @@ void main() {
     );
   });
 
+  test('accepts a valid three-task project plan and a JSON code fence', () {
+    final tasks = gateway.parseProjectPlanResponse('''
+```json
+{"tasks":[
+ {"id":"t1","title":"تحليل الطلب","description":"حدد المتطلبات والهيكل وأنشئ وثيقة التصميم.","agentId":"architect","risk":"low"},
+ {"id":"t2","title":"تنفيذ التطبيق","description":"أنشئ ملفات التطبيق المطلوبة وفق التصميم.","agentId":"developer","risk":"medium"},
+ {"id":"t3","title":"التحقق","description":"أضف الاختبارات وراجع الملفات الناتجة.","agentId":"qa","risk":"low"}
+]}
+```
+''');
+
+    expect(tasks, hasLength(3));
+    expect(tasks.first.agentId, 'architect');
+    expect(tasks.last.risk, 'low');
+  });
+
+  test('rejects project plans with invalid count, duplicate IDs or invalid agents', () {
+    expect(
+      () => gateway.parseProjectPlanResponse(
+        '{"tasks":[{"id":"t1","title":"A","description":"A","agentId":"developer","risk":"low"}]}',
+      ),
+      throwsFormatException,
+    );
+
+    expect(
+      () => gateway.parseProjectPlanResponse('''
+{"tasks":[
+ {"id":"same","title":"A","description":"A","agentId":"developer","risk":"low"},
+ {"id":"same","title":"B","description":"B","agentId":"qa","risk":"low"},
+ {"id":"t3","title":"C","description":"C","agentId":"architect","risk":"low"}
+]}
+'''),
+      throwsFormatException,
+    );
+
+    expect(
+      () => gateway.parseProjectPlanResponse('''
+{"tasks":[
+ {"id":"t1","title":"A","description":"A","agentId":"manager","risk":"low"},
+ {"id":"t2","title":"B","description":"B","agentId":"qa","risk":"low"},
+ {"id":"t3","title":"C","description":"C","agentId":"architect","risk":"low"}
+]}
+'''),
+      throwsFormatException,
+    );
+  });
+
   test('accepts a valid execution response and a JSON code fence', () {
     final output = gateway.parseAgentOutput('''
 ```json
