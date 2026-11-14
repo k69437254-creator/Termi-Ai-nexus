@@ -134,8 +134,16 @@ class ProjectExecutionManager {
             job.completer.complete(result);
           }
         } catch (error, stackTrace) {
+          Object reportedError = error;
+          try {
+            await _markUnfinishedTasksInterrupted(job, error);
+          } catch (recoveryError) {
+            reportedError = StateError(
+              '$error | تعذر حفظ حالة التعافي: $recoveryError',
+            );
+          }
           if (!job.completer.isCompleted) {
-            job.completer.completeError(error, stackTrace);
+            job.completer.completeError(reportedError, stackTrace);
           }
         } finally {
           _activeJob = null;
@@ -241,6 +249,46 @@ class ProjectExecutionManager {
           'Android project service stopped before the project reached a terminal state.',
         );
       }
+    }
+  }
+
+  Future<void> _markUnfinishedTasksInterrupted(
+    _QueuedProject job,
+    Object error,
+  ) async {
+    final projects = await _coordinator.listProjects();
+    ProjectRecord? persisted;
+
+    for (final candidate in projects) {
+      if (candidate.id == job.project.id) {
+        persisted = candidate;
+        break;
+      }
+    }
+
+    if (persisted == null) {
+      throw StateError(
+        'تعذر العثور على المشروع لحفظ حالة التعافي: ${job.project.id}',
+      );
+    }
+
+    var changed = false;
+    for (final task in persisted.tasks) {
+      if (task.status != TaskStatus.pending &&
+          task.status != TaskStatus.running) {
+        continue;
+      }
+
+      task.status = TaskStatus.interrupted;
+      task.result =
+          'توقف تنفيذ المشروع بسبب خطأ في بدء الخدمة أو متابعة التنفيذ: '
+          '$error. لم تُعد المهمة تلقائياً لتجنب تكرار آثار جانبية.';
+      changed = true;
+    }
+
+    if (changed) {
+      await _coordinator.save(persisted);
+      _mirrorTaskStates(job.project, persisted, job.onTaskChanged);
     }
   }
 
