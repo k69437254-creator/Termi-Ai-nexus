@@ -96,6 +96,55 @@ class ProjectExecutionService : Service() {
                     return@setMethodCallHandler
                 }
 
+                if (call.method == "taskUpdate") {
+                    val data = call.arguments as? Map<*, *>
+                    val updateProjectId = data?.get("projectId") as? String
+                    if (updateProjectId != activeProjectId) {
+                        result.success(false)
+                        return@setMethodCallHandler
+                    }
+
+                    val taskTitle = data?.get("taskTitle")
+                        ?.toString()?.take(80).orEmpty()
+                    val taskNumber =
+                        (data?.get("taskNumber") as? Number)?.toInt() ?: 0
+                    val taskCount =
+                        (data?.get("taskCount") as? Number)?.toInt() ?: 0
+                    val status = data?.get("status")?.toString().orEmpty()
+                    val taskResult = data?.get("result")
+                        ?.toString()?.take(110).orEmpty()
+
+                    val statusLabel = when (status) {
+                        "pending" -> "بانتظار التنفيذ"
+                        "running" -> "قيد التنفيذ"
+                        "completed" -> "اكتملت"
+                        "failed" -> "فشلت"
+                        "rolledBack" -> "تم التراجع"
+                        "interrupted" -> "توقفت"
+                        else -> "تحديث المهمة"
+                    }
+
+                    val detail = buildString {
+                        if (taskNumber > 0 && taskCount > 0) {
+                            append("$taskNumber/$taskCount • ")
+                        }
+                        append(statusLabel)
+                        if (taskTitle.isNotBlank()) {
+                            append(" • $taskTitle")
+                        }
+                        if (
+                            status in setOf("failed", "rolledBack", "interrupted") &&
+                            taskResult.isNotBlank()
+                        ) {
+                            append(" • $taskResult")
+                        }
+                    }
+
+                    updateNotification(detail)
+                    result.success(true)
+                    return@setMethodCallHandler
+                }
+
                 if (call.method != "complete") {
                     result.notImplemented()
                     return@setMethodCallHandler

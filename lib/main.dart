@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui' show DartPluginRegistrant;
 
 import 'package:flutter/services.dart';
@@ -80,6 +81,25 @@ Future<void> projectExecutionEntrypoint(List<String> args) async {
     final result = await coordinator.execute(
       project,
       control: control,
+      onTaskChanged: (task) {
+        final taskNumber =
+            project.tasks.indexWhere((item) => item.id == task.id) + 1;
+        unawaited(
+          _projectExecutionServiceChannel
+              .invokeMethod<void>(
+                'taskUpdate',
+                <String, Object?>{
+                  'projectId': projectId,
+                  'taskTitle': task.title,
+                  'taskNumber': taskNumber,
+                  'taskCount': project.tasks.length,
+                  'status': task.status.name,
+                  'result': task.result,
+                },
+              )
+              .catchError((Object _) {}),
+        );
+      },
     );
 
     success = !control.cancelRequested &&
