@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 
 import '../core/nexus_theme.dart';
@@ -14,24 +16,59 @@ class ProjectsScreen extends StatefulWidget {
 
 class _ProjectsScreenState extends State<ProjectsScreen> {
   late Future<List<ProjectRecord>> _future;
+  Timer? _refreshTimer;
+  bool _refreshing = false;
 
   @override
   void initState() {
     super.initState();
     _future = widget.coordinator.listProjects();
+    _refreshTimer = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => _refreshAutomatically(),
+    );
+  }
+
+  Future<void> _refreshAutomatically() async {
+    if (!mounted || _refreshing) return;
+
+    _refreshing = true;
+    try {
+      final next = widget.coordinator.listProjects();
+      setState(() => _future = next);
+      await next;
+    } catch (_) {
+      // Keep the last displayed project snapshot if a refresh fails.
+    } finally {
+      _refreshing = false;
+    }
   }
 
   Future<void> _refresh() async {
-    final next = widget.coordinator.listProjects();
-    setState(() => _future = next);
-    await next;
+    if (_refreshing) return;
+
+    _refreshing = true;
+    try {
+      final next = widget.coordinator.listProjects();
+      setState(() => _future = next);
+      await next;
+    } finally {
+      _refreshing = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) => FutureBuilder<List<ProjectRecord>>(
         future: _future,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
+          if (snapshot.connectionState == ConnectionState.waiting &&
+              !snapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
           final projects = snapshot.data ?? [];
