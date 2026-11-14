@@ -197,7 +197,7 @@ class AiGateway {
     return tasks;
   }
 
-  Future<String> executeTask({required String agentId, required String taskTitle, required String taskDescription, required String projectId, required String workspaceContext, required MemoryStore memory}) async {
+  Future<String> executeTask({required String agentId, required String taskTitle, required String taskDescription, required String projectId, required String workspaceContext, required MemoryStore memory, required String requestId}) async {
     final context = await memory.contextFor(agentId: agentId, projectId: projectId);
     return chat(
       agentId: agentId,
@@ -205,6 +205,7 @@ class AiGateway {
       system: 'أنت وكيل متخصص في فريق TermiAI-Nexus. أخرج JSON فقط بالشكل {"summary":"...","files":[{"path":"relative/path","content":"full file content"}],"verification":["..."],"risks":[]}. الملفات نصوص كاملة وليست diff. لا تستخدم مسارات مطلقة ولا .. ولا تنفذ أوامر. يجب أن تتضمن files ملفاً واحداً على الأقل بتغيير فعلي؛ لا تُعد مصفوفة فارغة أو محتوى مطابقاً لملف قائم. إذا تعذر إجراء تغيير فعلي، اشرح العائق في summary ولا تدّع النجاح. لا تختلق نتائج اختبار. السياق:\n$context',
       user: 'المهمة: $taskTitle\nالتفاصيل: $taskDescription\nأنت تعمل داخل مساحة مشروع معزولة. قدّم ملفات كاملة صغيرة ومتماسكة فقط عند الحاجة.\n\n$workspaceContext',
       temperature: 0.15,
+      requestId: requestId,
     );
   }
 

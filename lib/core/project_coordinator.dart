@@ -7,6 +7,15 @@ import 'memory_store.dart';
 import 'project_job_store.dart';
 import 'project_workspace.dart';
 
+class ProjectExecutionControl {
+  bool cancelRequested = false;
+  String? requestId;
+}
+
+class _ProjectExecutionCancelled implements Exception {
+  const _ProjectExecutionCancelled();
+}
+
 class ProjectCoordinator {
   ProjectCoordinator({AiGateway? gateway, MemoryStore? memory, ProjectJobStore? jobStore})
       : gateway = gateway ?? AiGateway(),
@@ -38,13 +47,15 @@ class ProjectCoordinator {
     return record;
   }
 
-  Future<ProjectRecord> execute(ProjectRecord project, {int maxRepairAttempts = 3, void Function(PlanTask task)? onTaskChanged}) async {
+  Future<ProjectRecord> execute(ProjectRecord project, {int maxRepairAttempts = 3, void Function(PlanTask task)? onTaskChanged, ProjectExecutionControl? control}) async {
+    final executionControl = control ?? ProjectExecutionControl();
     if (maxRepairAttempts < 1) throw ArgumentError.value(maxRepairAttempts, 'maxRepairAttempts', 'Must be at least 1.');
     final leaseId = await gateway.acquireProjectExecutionLease();
     try {
       final workspace = ProjectWorkspace(project.workspacePath);
       await workspace.initialize();
       for (final task in project.tasks) {
+        if (executionControl.cancelRequested) break;
         if (task.status == TaskStatus.completed) continue;
 
         if (task.status == TaskStatus.running) {
@@ -62,13 +73,23 @@ class ProjectCoordinator {
         onTaskChanged?.call(task);
         var success = false;
         var rollbackFailed = false;
+        var cancelled = false;
         var lastError = '';
         for (var attempt = 1; attempt <= maxRepairAttempts && !success && !rollbackFailed; attempt++) {
+          if (executionControl.cancelRequested) {
+            cancelled = true;
+            break;
+          }
           final checkpoint = await workspace.checkpoint('${task.id}_attempt_$attempt');
           var attemptedPatches = <String, String>{};
           var appliedPatches = <String, String>{};
           try {
             final workspaceContext = await workspace.readContextSnapshot();
+            if (executionControl.cancelRequested) {
+              throw const _ProjectExecutionCancelled();
+            }
+            final requestId = const Uuid().v4();
+            executionControl.requestId = requestId;
             final raw = await gateway.executeTask(
               agentId: task.agentId,
               taskTitle: task.title,
@@ -76,7 +97,14 @@ class ProjectCoordinator {
               projectId: project.id,
               workspaceContext: workspaceContext,
               memory: memory,
+              requestId: requestId,
             );
+            if (executionControl.requestId == requestId) {
+              executionControl.requestId = null;
+            }
+            if (executionControl.cancelRequested) {
+              throw const _ProjectExecutionCancelled();
+            }
             final output = gateway.parseAgentOutput(raw);
             final files = output['files'] as List;
             attemptedPatches = workspace.validatePatches(files);
@@ -85,8 +113,14 @@ class ProjectCoordinator {
               for (final path in changedPaths) path: attemptedPatches[path]!,
             };
             final expectedContents = Map<String, String>.from(appliedPatches);
+            if (executionControl.cancelRequested) {
+              throw const _ProjectExecutionCancelled();
+            }
             final verified = await workspace.verifyFiles(expectedContents);
             if (!verified) throw StateError('File content verification failed.');
+            if (executionControl.cancelRequested) {
+              throw const _ProjectExecutionCancelled();
+            }
             final summary = output['summary'] as String;
             final proposedChecks = (output['verification'] as List).cast<String>();
             final checksText = proposedChecks.isEmpty
@@ -99,6 +133,9 @@ class ProjectCoordinator {
                 '- Device build and test commands: NOT RUN\n\n'
                 '## Agent-proposed checks (not executed)\n$checksText';
             await workspace.writeAgentNote(task.id, '# ${task.title}\n\n$summary\n\n$evidence');
+            if (executionControl.cancelRequested) {
+              throw const _ProjectExecutionCancelled();
+            }
             task.result = '$summary\n\n'
                 'دليل التنفيذ: تم تعديل ${changedPaths.length} ملف/ملفات والتحقق من تطابق محتوى كل ملف بالكامل.\n'
                 'الملفات المعدلة:\n$changedFilesText\n'
@@ -117,6 +154,8 @@ class ProjectCoordinator {
               task.result = '$summary\n\nتعذر تحديث سجل الذاكرة: $memoryError';
             }
           } catch (error) {
+            executionControl.requestId = null;
+            final wasCancelled = error is _ProjectExecutionCancelled || executionControl.cancelRequested;
             task.status = TaskStatus.running;
             lastError = error.toString();
             if (error is WorkspaceApplyException && !error.rollbackComplete) {
@@ -141,7 +180,20 @@ class ProjectCoordinator {
             } catch (_) {
               // A memory-storage problem must not mask the actual task failure.
             }
+            if (wasCancelled) {
+              cancelled = true;
+              break;
+            }
           }
+        }
+        if (cancelled || executionControl.cancelRequested) {
+          task.status = TaskStatus.interrupted;
+          task.result = rollbackFailed
+              ? 'طُلب إلغاء المهمة، لكن تعذر إثبات اكتمال التراجع الآمن. يلزم فحص مساحة العمل.'
+              : 'أُلغي تنفيذ المهمة. أُوقف طلب Spark وجرت محاولة التراجع عن تغييرات المحاولة مع الحفاظ على التعديلات الخارجية.';
+          await save(project);
+          onTaskChanged?.call(task);
+          break;
         }
         if (!success) {
           task.status = rollbackFailed ? TaskStatus.failed : TaskStatus.rolledBack;
@@ -164,6 +216,8 @@ class ProjectCoordinator {
       await gateway.releaseProjectExecutionLease(leaseId);
     }
   }
+
+  Future<bool> cancelGeneration(String requestId) => gateway.cancelGeneration(requestId);
 
   Future<void> save(ProjectRecord project) async {
     final all = await listProjects();

@@ -272,6 +272,29 @@ class _AssistantScreenState extends State<AssistantScreen> {
     }
   }
 
+  Future<void> _cancelExecution() async {
+    final projectId = _executingProjectId;
+    if (projectId == null) return;
+    try {
+      final accepted = await widget.executionManager.cancel(projectId);
+      if (!mounted) return;
+      if (accepted) {
+        setState(() => _messages.add(const _ChatMessage(
+          isUser: false,
+          text: 'تم استلام طلب الإلغاء. يجري إيقاف التوليد والتراجع الآمن عن تغييرات المهمة الحالية.',
+        )));
+      }
+    } catch (error) {
+      if (mounted) setState(() => _messages.add(_ChatMessage(
+        isUser: false,
+        text: 'تعذر إرسال طلب الإلغاء: $error',
+        isError: true,
+      )));
+    }
+    _persistConversation();
+    _scrollToLatest();
+  }
+
   @override
   Widget build(BuildContext context) => Column(
         children: [
@@ -308,6 +331,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
                         executing: message.project != null && message.project!.id == _executingProjectId,
                         alreadyExecuted: message.project != null && _executedProjects.contains(message.project!.id),
                         onApprove: message.project == null ? null : () => _execute(message.project!),
+                  onCancel: _executing && message.project?.id == _executingProjectId ? _cancelExecution : null,
                       );
                     }
                     return _TypingBubble(executing: _executing);
@@ -494,12 +518,13 @@ class _MessageBubble extends StatelessWidget {
 }
 
 class _PlanBubble extends StatelessWidget {
-  const _PlanBubble({required this.project, required this.canApprove, required this.executing, required this.alreadyExecuted, required this.onApprove});
+  const _PlanBubble({required this.project, required this.canApprove, required this.executing, required this.alreadyExecuted, required this.onApprove, this.onCancel});
   final ProjectRecord project;
   final bool canApprove;
   final bool executing;
   final bool alreadyExecuted;
   final VoidCallback? onApprove;
+  final VoidCallback? onCancel;
 
   @override
   Widget build(BuildContext context) => NexusGlassPanel(
@@ -549,7 +574,15 @@ class _PlanBubble extends StatelessWidget {
                 ),
               )
             else if (executing)
-              const NexusStatusPill('قيد التنفيذ', color: NexusPalette.warning, icon: Icons.sync_rounded)
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: onCancel,
+                  icon: const Icon(Icons.stop_circle_outlined),
+                  label: const Text('إلغاء تنفيذ المشروع'),
+                  style: OutlinedButton.styleFrom(foregroundColor: NexusPalette.danger),
+                ),
+              )
             else if (alreadyExecuted)
               const NexusStatusPill('انتهى التنفيذ', color: NexusPalette.success, icon: Icons.check_circle_outline_rounded)
             else

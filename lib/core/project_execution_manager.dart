@@ -16,6 +16,7 @@ class ProjectExecutionManager {
   final ProjectCoordinator _coordinator;
   final Queue<_QueuedProject> _queue = Queue<_QueuedProject>();
   final Set<String> _queuedOrRunningProjectIds = <String>{};
+  final Map<String, ProjectExecutionControl> _controls = {};
 
   bool _draining = false;
 
@@ -37,17 +38,53 @@ class ProjectExecutionManager {
     }
 
     final completer = Completer<ProjectRecord>();
+    final control = ProjectExecutionControl();
+    _controls[project.id] = control;
 
     _queue.add(
       _QueuedProject(
         project: project,
         onTaskChanged: onTaskChanged,
         completer: completer,
+        control: control,
       ),
     );
 
     unawaited(_drain());
     return completer.future;
+  }
+
+  Future<bool> cancel(String projectId) async {
+    final control = _controls[projectId];
+    if (control == null || control.cancelRequested) return false;
+    control.cancelRequested = true;
+
+    _QueuedProject? queuedJob;
+    for (final job in _queue) {
+      if (job.project.id == projectId) {
+        queuedJob = job;
+        break;
+      }
+    }
+    if (queuedJob != null) {
+      _queue.remove(queuedJob);
+      _controls.remove(projectId);
+      _queuedOrRunningProjectIds.remove(projectId);
+      if (!queuedJob.completer.isCompleted) {
+        queuedJob.completer.complete(queuedJob.project);
+      }
+      return true;
+    }
+
+    final requestId = control.requestId;
+    if (requestId != null) {
+      try {
+        await _coordinator.cancelGeneration(requestId);
+      } catch (_) {
+        // The cancellation flag remains active; the coordinator checks it at safe boundaries.
+      }
+    }
+    return true;
   }
 
   Future<void> _drain() async {
@@ -63,6 +100,7 @@ class ProjectExecutionManager {
           final result = await _coordinator.execute(
             job.project,
             onTaskChanged: job.onTaskChanged,
+            control: job.control,
           );
 
           if (!job.completer.isCompleted) {
@@ -73,6 +111,7 @@ class ProjectExecutionManager {
             job.completer.completeError(error, stackTrace);
           }
         } finally {
+          _controls.remove(job.project.id);
           _queuedOrRunningProjectIds.remove(job.project.id);
         }
       }
@@ -91,9 +130,11 @@ class _QueuedProject {
     required this.project,
     required this.onTaskChanged,
     required this.completer,
+    required this.control,
   });
 
   final ProjectRecord project;
   final void Function(PlanTask task)? onTaskChanged;
   final Completer<ProjectRecord> completer;
+  final ProjectExecutionControl control;
 }
