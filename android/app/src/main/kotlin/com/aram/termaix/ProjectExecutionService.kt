@@ -152,7 +152,15 @@ class ProjectExecutionService : Service() {
                 }
 
                 val data = call.arguments as? Map<*, *>
-                val completedId = data?.get("projectId") as? String
+                if (data == null) {
+                    result.error(
+                        "INVALID_ARGUMENTS",
+                        "بيانات إكمال المشروع غير صالحة.",
+                        null
+                    )
+                    return@setMethodCallHandler
+                }
+                val completedId = data["projectId"] as? String
 
                 if (completedId != activeProjectId) {
                     result.error(
