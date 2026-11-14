@@ -24,14 +24,38 @@ class ApprovalPolicy {
     return const ApprovalDecision(requiresApproval: false, reason: 'لم تُطابق صيغة الأمر قواعد الخطر المعروفة. راجع الأمر قبل تشغيله.');
   }
 
+  static bool isSensitivePathSegment(String segment) {
+    final name = segment.toLowerCase();
+    const exactNames = {
+      '.git', '.termai', '.env', '.npmrc', '.pypirc', '.netrc',
+      '.git-credentials', 'google-services.json', '.ssh', '.aws', '.azure', '.kube',
+    };
+    const sensitiveExtensions = {
+      '.pem', '.p12', '.pfx', '.jks', '.keystore', '.key', '.gpg', '.asc',
+      '.der', '.cer',
+    };
+    final sensitiveName = RegExp(
+      r'(^|[._-])(secret|secrets|credential|credentials|token|password|passwd|private|apikey|api_key|auth|service-account)([._-]|$)',
+      caseSensitive: false,
+    );
+    return exactNames.contains(name) ||
+        name.startsWith('.env.') ||
+        name.endsWith('.env') ||
+        name.startsWith('id_rsa') ||
+        name.startsWith('id_ed25519') ||
+        sensitiveExtensions.any(name.endsWith) ||
+        sensitiveName.hasMatch(name);
+  }
+
   static bool validRelativePath(String path) {
     final normalized = path.replaceAll('\\', '/').trim();
     if (normalized.isEmpty || normalized.startsWith('/') || normalized.startsWith('~')) return false;
     if (RegExp(r'^[a-zA-Z]:').hasMatch(normalized)) return false;
-    final segments = normalized.split('/');
-    if (segments.any((part) => part == '..' || part.isEmpty)) return false;
-    if (segments.first == '.termai' || segments.first == '.git') return false;
     if (normalized.contains('\u0000')) return false;
+    final segments = normalized.split('/');
+    if (segments.any((part) =>
+        part.isEmpty || part == '.' || part == '..' ||
+        isSensitivePathSegment(part))) return false;
     return true;
   }
 }

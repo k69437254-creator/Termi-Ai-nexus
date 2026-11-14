@@ -184,10 +184,15 @@ class ProjectWorkspace {
       for (final entity in children) {
         final name = p.basename(entity.path);
         if (entity is Directory) {
-          if (!ignoredDirectories.contains(name) && pending.length < 128) pending.add(entity);
+          if (!ignoredDirectories.contains(name) &&
+              !ApprovalPolicy.isSensitivePathSegment(name) && pending.length < 128) {
+            pending.add(entity);
+          }
           continue;
         }
-        if (entity is! File || name == '.env' || name.startsWith('.env.')) continue;
+        if (entity is! File) continue;
+        final relative = p.relative(entity.path, from: rootPath).replaceAll('\\', '/');
+        if (relative.split('/').any(ApprovalPolicy.isSensitivePathSegment)) continue;
         final lower = name.toLowerCase();
         if (ignoredNames.contains(lower) || lower.startsWith('id_rsa') || lower.startsWith('id_ed25519')) continue;
         if (secretName.hasMatch(name) || ignoredExtensions.any(lower.endsWith)) continue;
@@ -249,7 +254,7 @@ class ProjectWorkspace {
       if (type != FileSystemEntityType.file &&
           type != FileSystemEntityType.directory) continue;
       final name = p.basename(entity.path);
-      if (name == '.git' || name == '.termai') continue;
+      if (ApprovalPolicy.isSensitivePathSegment(name)) continue;
       entries.add({
         'name': name,
         'type': type == FileSystemEntityType.directory ? 'directory' : 'file',
@@ -339,7 +344,8 @@ class ProjectWorkspace {
         final name = p.basename(entity.path);
 
         if (type == FileSystemEntityType.directory) {
-          if (!ignoredDirectories.contains(name) && !secretName.hasMatch(name)) {
+          if (!ignoredDirectories.contains(name) &&
+              !ApprovalPolicy.isSensitivePathSegment(name)) {
             pending.add(Directory(entity.path));
           }
           continue;
@@ -347,8 +353,8 @@ class ProjectWorkspace {
         if (type != FileSystemEntityType.file) continue;
 
         final lower = name.toLowerCase();
-        if (name == '.env' ||
-            name.startsWith('.env.') ||
+        final relative = p.relative(entity.path, from: rootPath).replaceAll('\\', '/');
+        if (relative.split('/').any(ApprovalPolicy.isSensitivePathSegment) ||
             ignoredNames.contains(lower) ||
             lower.startsWith('id_rsa') ||
             lower.startsWith('id_ed25519') ||
@@ -454,12 +460,33 @@ class ProjectWorkspace {
     return utf8.decode(bytes);
   }
 
+  Future<bool> _hasSafePath(String relativePath, {required bool requireFile}) async {
+    if (!ApprovalPolicy.validRelativePath(relativePath)) return false;
+    final normalized = p.normalize(relativePath.replaceAll('\\', '/'));
+    final target = p.normalize(p.join(rootPath, normalized));
+    if (target == rootPath || !p.isWithin(rootPath, target)) return false;
+
+    var cursor = rootPath;
+    final segments = normalized.split('/');
+    for (var index = 0; index < segments.length; index++) {
+      cursor = p.join(cursor, segments[index]);
+      final type = await FileSystemEntity.type(cursor, followLinks: false);
+      if (type == FileSystemEntityType.link) return false;
+      final isLeaf = index == segments.length - 1;
+      if (!isLeaf && type != FileSystemEntityType.directory) return false;
+      if (isLeaf && requireFile && type != FileSystemEntityType.file) return false;
+      if (isLeaf && !requireFile &&
+          type != FileSystemEntityType.file &&
+          type != FileSystemEntityType.notFound) return false;
+    }
+    return true;
+  }
+
   Future<bool> verifyFiles(Map<String, String> expectedContents) async {
     if (expectedContents.isEmpty) return false;
     for (final entry in expectedContents.entries) {
-      if (!ApprovalPolicy.validRelativePath(entry.key)) return false;
+      if (!await _hasSafePath(entry.key, requireFile: true)) return false;
       final file = File(p.join(rootPath, entry.key));
-      if (await FileSystemEntity.type(file.path, followLinks: false) != FileSystemEntityType.file) return false;
       if (await file.length() > 2 * 1024 * 1024) return false;
       if (await file.readAsString() != entry.value) return false;
     }
@@ -484,6 +511,10 @@ class ProjectWorkspace {
       }
       final current = File(p.join(rootPath, relativePath));
       try {
+        if (!await _hasSafePath(relativePath, requireFile: false)) {
+          failed.add(relativePath);
+          continue;
+        }
         if (await FileSystemEntity.type(current.path, followLinks: false) != FileSystemEntityType.file) {
           preserved.add(relativePath);
           continue;
@@ -551,14 +582,16 @@ class ProjectWorkspace {
     await target.create(recursive: true);
     await for (final entity in source.list(followLinks: false)) {
       final name = p.basename(entity.path);
-      if (skipTermaiCheckpoints && name == 'checkpoints' && p.basename(source.path) == '.termai') continue;
+      if (name == '.git' ||
+          (skipTermaiCheckpoints && name == '.termai') ||
+          ApprovalPolicy.isSensitivePathSegment(name)) continue;
       final destination = p.join(target.path, name);
       if (entity is Directory) {
         await _copyTree(entity, Directory(destination), skipTermaiCheckpoints: skipTermaiCheckpoints);
       } else if (entity is File) {
         await entity.copy(destination);
       }
-      // Symlinks are intentionally not followed or copied.
+      // Symlinks and sensitive paths are intentionally not followed or copied.
     }
   }
 }

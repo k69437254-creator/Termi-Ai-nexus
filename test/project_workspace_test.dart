@@ -92,6 +92,68 @@ void main() {
     expect(context, isNot(contains('.git/config')));
   });
 
+
+  test('verification rejects symbolic-link parents', () async {
+    final outside = await Directory.systemTemp.createTemp('termai-outside-');
+    addTearDown(() async {
+      if (await outside.exists()) await outside.delete(recursive: true);
+    });
+    await File('${outside.path}/sentinel.txt').writeAsString('outside');
+    final link = Link('${temporaryRoot.path}/linked');
+    await link.create(outside.path);
+
+    expect(
+      await workspace.verifyFiles({'linked/sentinel.txt': 'outside'}),
+      isFalse,
+    );
+  });
+
+  test('blocks nested sensitive directories from reads, search, listing and patches', () async {
+    final secretDirectory = Directory('${temporaryRoot.path}/secrets');
+    await secretDirectory.create();
+    await File('${secretDirectory.path}/ordinary-name.txt')
+        .writeAsString('NEXUS_PRIVATE_SENTINEL');
+
+    expect(
+      () => workspace.validatePatches([
+        {'path': 'secrets/ordinary-name.txt', 'content': 'overwrite'},
+      ]),
+      throwsFormatException,
+    );
+    await expectLater(
+      workspace.readTextFile('secrets/ordinary-name.txt'),
+      throwsFormatException,
+    );
+
+    final context = await workspace.readContextSnapshot();
+    expect(context, isNot(contains('NEXUS_PRIVATE_SENTINEL')));
+
+    final listed = await workspace.listDirectory('');
+    expect(listed.any((entry) => entry['name'] == 'secrets'), isFalse);
+
+    final searched = await workspace.searchFiles('NEXUS_PRIVATE_SENTINEL');
+    expect(searched['results'], isEmpty);
+  });
+
+  test('checkpoints exclude VCS metadata and sensitive folders', () async {
+    await Directory('${temporaryRoot.path}/.git').create();
+    await File('${temporaryRoot.path}/.git/config')
+        .writeAsString('GIT_PRIVATE_SENTINEL');
+    await Directory('${temporaryRoot.path}/credentials').create();
+    await File('${temporaryRoot.path}/credentials/ordinary.txt')
+        .writeAsString('CREDENTIAL_PRIVATE_SENTINEL');
+
+    final checkpoint = await workspace.checkpoint('sensitive_exclusion');
+    expect(
+      await File('${checkpoint.directory.path}/.git/config').exists(),
+      isFalse,
+    );
+    expect(
+      await File('${checkpoint.directory.path}/credentials/ordinary.txt').exists(),
+      isFalse,
+    );
+  });
+
   test('rolls back only agent-written files and preserves later user edits', () async {
     final original = File('${temporaryRoot.path}/lib/example.dart');
     await original.parent.create(recursive: true);
