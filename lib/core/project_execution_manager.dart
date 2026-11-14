@@ -231,7 +231,7 @@ class ProjectExecutionManager {
 }
 
 class _QueuedProject {
-  const _QueuedProject({
+  _QueuedProject({
     required this.project,
     required this.onTaskChanged,
     required this.completer,
