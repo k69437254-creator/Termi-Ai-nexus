@@ -63,10 +63,8 @@ object ModelRuntime {
     private val requestsById = ConcurrentHashMap<String, QueuedGeneration>()
     private val cancelledBeforeStart = ConcurrentHashMap<String, Long>()
 
-    private companion object {
-        const val CANCEL_TOMBSTONE_TTL_MS = 5 * 60 * 1000L
-        const val MAX_CANCEL_TOMBSTONES = 256
-    }
+    private const val CANCEL_TOMBSTONE_TTL_MS = 5 * 60 * 1000L
+    private const val MAX_CANCEL_TOMBSTONES = 256
 
     private fun rememberEarlyCancellation(requestId: String) {
         val now = System.currentTimeMillis()
