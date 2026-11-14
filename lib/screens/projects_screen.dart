@@ -4,11 +4,18 @@ import 'package:material_ui/material_ui.dart';
 
 import '../core/nexus_theme.dart';
 import '../core/project_coordinator.dart';
+import '../core/project_execution_manager.dart';
 import '../models/domain.dart';
 
 class ProjectsScreen extends StatefulWidget {
-  const ProjectsScreen({super.key, required this.coordinator});
+  const ProjectsScreen({
+    super.key,
+    required this.coordinator,
+    required this.executionManager,
+  });
+
   final ProjectCoordinator coordinator;
+  final ProjectExecutionManager executionManager;
 
   @override
   State<ProjectsScreen> createState() => _ProjectsScreenState();
@@ -104,6 +111,7 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
                           builder: (_) => _ProjectDetails(
                             project: project,
                             coordinator: widget.coordinator,
+                            executionManager: widget.executionManager,
                           ),
                         ),
                       )),
@@ -166,10 +174,12 @@ class _ProjectDetails extends StatefulWidget {
   const _ProjectDetails({
     required this.project,
     required this.coordinator,
+    required this.executionManager,
   });
 
   final ProjectRecord project;
   final ProjectCoordinator coordinator;
+  final ProjectExecutionManager executionManager;
 
   @override
   State<_ProjectDetails> createState() => _ProjectDetailsState();
@@ -178,6 +188,41 @@ class _ProjectDetails extends StatefulWidget {
 class _ProjectDetailsState extends State<_ProjectDetails> {
   Timer? _refreshTimer;
   late Future<ProjectRecord?> _future;
+  bool _resuming = false;
+
+  bool _canResumeSafely(ProjectRecord project) {
+    return project.tasks.isNotEmpty &&
+        project.tasks.any(
+          (task) => task.status == TaskStatus.pending,
+        ) &&
+        project.tasks.every(
+          (task) =>
+              task.status == TaskStatus.pending ||
+              task.status == TaskStatus.completed,
+        );
+  }
+
+  Future<void> _resumeProject() async {
+    if (_resuming) return;
+
+    setState(() => _resuming = true);
+
+    try {
+      await widget.executionManager.resume(widget.project.id);
+    } catch (error) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('تعذر استئناف المشروع: $error'),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _resuming = false);
+      }
+    }
+  }
 
   @override
   void initState() {
@@ -223,6 +268,27 @@ class _ProjectDetailsState extends State<_ProjectDetails> {
               const SizedBox(height: 7),
               Text(project.request, style: const TextStyle(color: NexusPalette.muted, fontSize: 12, height: 1.5)),
               const SizedBox(height: 15),
+              if (_canResumeSafely(project)) ...[
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: _resuming ? null : _resumeProject,
+                    icon: _resuming
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.play_arrow_rounded),
+                    label: Text(
+                      _resuming
+                          ? 'يجري استئناف المهام المتبقية…'
+                          : 'استئناف المهام المتبقية بأمان',
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+              ],
               const NexusSectionHeader('مسار التنفيذ', subtitle: 'الحالة الحالية لكل مهمة في هذه المساحة.'),
               ...project.tasks.asMap().entries.map((entry) {
                 final task = entry.value;

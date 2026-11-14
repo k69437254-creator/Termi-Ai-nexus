@@ -54,6 +54,45 @@ class ProjectExecutionManager {
     return completer.future;
   }
 
+  Future<ProjectRecord> resume(String projectId) async {
+    if (isQueuedOrRunning(projectId)) {
+      throw StateError('المشروع موجود بالفعل في قائمة التنفيذ.');
+    }
+
+    final projects = await _coordinator.listProjects();
+    ProjectRecord? persisted;
+
+    for (final candidate in projects) {
+      if (candidate.id == projectId) {
+        persisted = candidate;
+        break;
+      }
+    }
+
+    if (persisted == null) {
+      throw StateError('لم يتم العثور على المشروع المحفوظ.');
+    }
+
+    final safeToResume = persisted.tasks.isNotEmpty &&
+        persisted.tasks.any(
+          (task) => task.status == TaskStatus.pending,
+        ) &&
+        persisted.tasks.every(
+          (task) =>
+              task.status == TaskStatus.pending ||
+              task.status == TaskStatus.completed,
+        );
+
+    if (!safeToResume) {
+      throw StateError(
+        'لا يمكن الاستئناف بأمان. توجد مهام متوقفة أو فاشلة '
+        'أو كانت قيد التنفيذ؛ يجب فحصها أولاً.',
+      );
+    }
+
+    return enqueue(persisted);
+  }
+
   Future<bool> cancel(String projectId) async {
     _QueuedProject? queuedJob;
 

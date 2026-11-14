@@ -29,7 +29,10 @@ class _AppShellState extends State<AppShell> {
   Widget _page() => switch (_selected) {
         0 => OfficeScreen(onOpenAssistant: _openAssistant),
         1 => AssistantScreen(coordinator: _coordinator, executionManager: _executionManager, onBack: () => setState(() => _selected = 0)),
-        2 => ProjectsScreen(coordinator: _coordinator),
+        2 => ProjectsScreen(
+            coordinator: _coordinator,
+            executionManager: _executionManager,
+          ),
         3 => const ControlScreen(),
         4 => const TerminalScreen(),
         5 => const GitHubScreen(),
