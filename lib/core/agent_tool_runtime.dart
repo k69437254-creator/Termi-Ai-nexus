@@ -9,6 +9,24 @@ class AgentToolRuntime {
     String toolName,
     Map<String, dynamic> arguments,
   ) async {
+    if (toolName == 'list_files') {
+      final path = arguments['path'];
+      if (path != null && path is! String) {
+        return {'ok': false, 'error': 'Path must be text.'};
+      }
+      try {
+        final entries = await workspace.listDirectory(path as String? ?? '');
+        return {
+          'ok': true,
+          'path': path ?? '.',
+          'entries': entries.take(200).toList(),
+          'truncated': entries.length > 200,
+        };
+      } catch (error) {
+        return {'ok': false, 'error': error.toString()};
+      }
+    }
+
     if (toolName != 'read_file') {
       return {'ok': false, 'error': 'Unknown tool: $toolName'};
     }

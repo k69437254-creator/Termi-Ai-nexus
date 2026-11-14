@@ -215,6 +215,51 @@ class ProjectWorkspace {
     return output.toString();
   }
 
+  Future<List<Map<String, String>>> listDirectory(String relativePath) async {
+    final normalized = relativePath.trim().isEmpty
+        ? ''
+        : p.normalize(relativePath.replaceAll('\\', '/'));
+    if (normalized.isNotEmpty && !ApprovalPolicy.validRelativePath(relativePath)) {
+      throw FormatException('Rejected unsafe directory path: $relativePath');
+    }
+    final target = normalized.isEmpty
+        ? rootPath
+        : p.normalize(p.join(rootPath, normalized));
+    if (target != rootPath && !p.isWithin(rootPath, target)) {
+      throw FormatException('Directory escaped workspace: $relativePath');
+    }
+    var cursor = rootPath;
+    if (normalized.isNotEmpty) {
+      for (final segment in normalized.split('/')) {
+        cursor = p.join(cursor, segment);
+        if (await FileSystemEntity.type(cursor, followLinks: false) ==
+            FileSystemEntityType.link) {
+          throw FormatException('Symlink access is forbidden: $relativePath');
+        }
+      }
+    }
+    if (await FileSystemEntity.type(target, followLinks: false) !=
+        FileSystemEntityType.directory) {
+      throw FileSystemException('Directory not found', target);
+    }
+    final entries = <Map<String, String>>[];
+    await for (final entity in Directory(target).list(followLinks: false)) {
+      final type = await FileSystemEntity.type(entity.path, followLinks: false);
+      if (type == FileSystemEntityType.link) continue;
+      if (type != FileSystemEntityType.file &&
+          type != FileSystemEntityType.directory) continue;
+      final name = p.basename(entity.path);
+      if (name == '.git' || name == '.termai') continue;
+      entries.add({
+        'name': name,
+        'type': type == FileSystemEntityType.directory ? 'directory' : 'file',
+      });
+      if (entries.length >= 201) break;
+    }
+    entries.sort((a, b) => a['name']!.compareTo(b['name']!));
+    return entries;
+  }
+
   Future<String> readTextFile(String relativePath) async {
     if (!ApprovalPolicy.validRelativePath(relativePath)) {
       throw FormatException('Rejected unsafe path: $relativePath');

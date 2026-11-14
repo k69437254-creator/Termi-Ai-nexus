@@ -55,4 +55,26 @@ void main() {
     expect((result['content'] as String).length, 16000);
   });
 
+
+  test('lists real files and directories in the workspace', () async {
+    await File('${root.path}/README.md').writeAsString('content');
+    await Directory('${root.path}/lib').create();
+    final result = await runtime.execute('list_files', {});
+    expect(result['ok'], isTrue);
+    final entries = result['entries'] as List;
+    expect(entries.any((e) => e['name'] == 'README.md' && e['type'] == 'file'), isTrue);
+    expect(entries.any((e) => e['name'] == 'lib' && e['type'] == 'directory'), isTrue);
+    expect(entries.any((e) => e['name'] == '.termai'), isFalse);
+  });
+
+  test('rejects directory traversal in list_files', () async {
+    final result = await runtime.execute('list_files', {'path': '../'});
+    expect(result['ok'], isFalse);
+  });
+
+  test('rejects non-text list_files paths', () async {
+    final result = await runtime.execute('list_files', {'path': 42});
+    expect(result['ok'], isFalse);
+  });
+
 }

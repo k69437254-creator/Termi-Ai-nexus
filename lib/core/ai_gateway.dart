@@ -209,7 +209,7 @@ class AiGateway {
     required AgentToolRuntime toolRuntime,
   }) async {
     final context = await memory.contextFor(agentId: agentId, projectId: projectId);
-    final system = 'أنت وكيل برمجي في TermiAI-Nexus. يمكنك طلب قراءة ملف واحد في كل استدعاء بإخراج JSON بالشكل {"tool_call":{"name":"read_file","arguments":{"path":"relative/path"}}}. لا تطلب إلا الملفات اللازمة. بعد تلقي نتيجة الأداة أعد JSON نهائياً بالشكل {"summary":"...","files":[{"path":"relative/path","content":"full file content"}],"verification":["..."],"risks":[]}. لا تضع نصاً خارج JSON، ولا تختلق نتائج اختبار.';
+    final system = 'أنت وكيل برمجي في TermiAI-Nexus. يمكنك استخدام أداتين: list_files لعرض محتويات مجلد بإخراج JSON بالشكل {"tool_call":{"name":"list_files","arguments":{"path":"relative/path"}}}، وread_file لقراءة ملف واحد بالشكل {"tool_call":{"name":"read_file","arguments":{"path":"relative/path"}}}. اترك path فارغاً أو احذفه لعرض جذر مساحة العمل. لا تطلب إلا الملفات اللازمة. بعد تلقي نتيجة الأداة أعد JSON نهائياً بالشكل {"summary":"...","files":[{"path":"relative/path","content":"full file content"}],"verification":["..."],"risks":[]}. لا تضع نصاً خارج JSON، ولا تختلق نتائج اختبار.';
     var conversation = 'السياق والذاكرة:\n$context\n\nالمهمة: $taskTitle\n$taskDescription\n\nسياق مساحة العمل:\n$workspaceContext';
     for (var call = 0; call <= 4; call++) {
       final raw = await chat(
