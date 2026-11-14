@@ -101,7 +101,10 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
                         onTap: () => showModalBottomSheet<void>(
                           context: context,
                           isScrollControlled: true,
-                          builder: (_) => _ProjectDetails(project: project),
+                          builder: (_) => _ProjectDetails(
+                            project: project,
+                            coordinator: widget.coordinator,
+                          ),
                         ),
                       )),
               ],
@@ -159,12 +162,58 @@ class _ProjectCard extends StatelessWidget {
   }
 }
 
-class _ProjectDetails extends StatelessWidget {
-  const _ProjectDetails({required this.project});
+class _ProjectDetails extends StatefulWidget {
+  const _ProjectDetails({
+    required this.project,
+    required this.coordinator,
+  });
+
   final ProjectRecord project;
+  final ProjectCoordinator coordinator;
 
   @override
-  Widget build(BuildContext context) => SafeArea(
+  State<_ProjectDetails> createState() => _ProjectDetailsState();
+}
+
+class _ProjectDetailsState extends State<_ProjectDetails> {
+  Timer? _refreshTimer;
+  late Future<ProjectRecord?> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _loadProject();
+    _refreshTimer = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => _refreshProject(),
+    );
+  }
+
+  Future<ProjectRecord?> _loadProject() async {
+    final projects = await widget.coordinator.listProjects();
+    for (final project in projects) {
+      if (project.id == widget.project.id) return project;
+    }
+    return null;
+  }
+
+  void _refreshProject() {
+    if (!mounted) return;
+    setState(() => _future = _loadProject());
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<ProjectRecord?>(
+        future: _future,
+        builder: (context, snapshot) {
+          final project = snapshot.data ?? widget.project;
+          return SafeArea(
         child: SizedBox(
           height: MediaQuery.sizeOf(context).height * 0.82,
           child: ListView(
@@ -206,4 +255,7 @@ class _ProjectDetails extends StatelessWidget {
           ),
         ),
       );
+        },
+      );
+  }
 }
