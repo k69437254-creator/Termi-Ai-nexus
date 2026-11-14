@@ -10,8 +10,8 @@ class PtyService {
   int? get sessionId => _sessionId;
   Stream<Map<String, dynamic>> get events => _stream ??= _events.receiveBroadcastStream().map((event) => Map<String, dynamic>.from(event as Map));
 
-  Future<int> start({String? workingDirectory, int rows = 28, int columns = 100}) async {
-    final id = await _methods.invokeMethod<int>('start', {'workingDirectory': workingDirectory ?? '', 'rows': rows, 'columns': columns});
+  Future<int> start({String? workingDirectory, String? workspacePath, String? githubToken, int rows = 28, int columns = 100}) async {
+    final id = await _methods.invokeMethod<int>('start', {'workingDirectory': workingDirectory ?? '', 'workspacePath': workspacePath ?? '', 'githubToken': githubToken ?? '', 'rows': rows, 'columns': columns});
     if (id == null) throw StateError('Native PTY did not return a session id.');
     _sessionId = id;
     return id;

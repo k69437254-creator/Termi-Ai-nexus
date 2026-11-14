@@ -29,6 +29,7 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         AramEngineChannel.register(flutterEngine, applicationContext, this)
         AgentCommandChannel.register(flutterEngine, applicationContext)
+        LinuxRuntimeChannel.register(flutterEngine, applicationContext)
         NexusDeviceChannel.register(flutterEngine, this)
 
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL).setStreamHandler(object : EventChannel.StreamHandler {
@@ -40,13 +41,38 @@ class MainActivity : FlutterActivity() {
             try {
                 when (call.method) {
                     "start" -> {
+                        if (!LinuxRuntimeChannel.isInstalled(applicationContext)) {
+                            result.error("LINUX_NOT_INSTALLED", "يجب تهيئة Ubuntu من شاشة الطرفية أولاً.", null)
+                            return@setMethodCallHandler
+                        }
                         val directory = call.argument<String>("workingDirectory")?.takeIf { it.isNotBlank() } ?: filesDir.absolutePath
                         val rows = call.argument<Int>("rows") ?: 28
                         val columns = call.argument<Int>("columns") ?: 100
-                        val handle = PtyNative.nativeSpawn(directory, rows, columns)
+                        val githubToken = call.argument<String>("githubToken").orEmpty()
+                        val workspacePath = call.argument<String>("workspacePath")
+                            ?: error("Missing project workspace path.")
+                        val bootstrap = LinuxRuntimeChannel.terminalBootstrap(applicationContext, workspacePath)
+                        val handle = PtyNative.nativeSpawn(directory, rows, columns, githubToken)
                         if (handle == 0L) throw IllegalStateException("Native PTY allocation failed")
                         sessions[handle] = Session(handle)
                         startReader(handle)
+                        thread(name = "termai-linux-bootstrap-$handle", isDaemon = true) {
+                            try {
+                                Thread.sleep(500)
+                                if (sessions[handle]?.active == true) {
+                                    val written = PtyNative.nativeWrite(handle, (bootstrap + "\n").toByteArray(StandardCharsets.UTF_8))
+                                    if (written <= 0) {
+                                        mainHandler.post {
+                                            eventSink?.success(mapOf("id" to handle, "data" to "\r\n[Linux bootstrap failed]\r\n"))
+                                        }
+                                    }
+                                }
+                            } catch (_: Throwable) {
+                                mainHandler.post {
+                                    eventSink?.success(mapOf("id" to handle, "data" to "\r\n[Linux bootstrap failed]\r\n"))
+                                }
+                            }
+                        }
                         result.success(handle)
                     }
                     "write" -> {

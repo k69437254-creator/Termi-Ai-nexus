@@ -8,7 +8,7 @@ public final class PtyNative {
 
     private PtyNative() {}
 
-    public static native long nativeSpawn(String workingDirectory, int rows, int columns);
+    public static native long nativeSpawn(String workingDirectory, int rows, int columns, String githubToken);
     public static native int nativeRead(long handle, byte[] destination);
     public static native int nativeWrite(long handle, byte[] source);
     public static native void nativeResize(long handle, int rows, int columns);

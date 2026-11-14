@@ -20,8 +20,9 @@ class _GitHubScreenState extends State<GitHubScreen> {
     if (_busy) return;
     setState(() { _busy = true; _message = ''; });
     try {
+      final account = await _github.authenticatedUser();
       final repos = await _github.repositories();
-      if (mounted) setState(() { _repos = repos; _message = 'تم تحميل ${repos.length} مستودعاً.'; });
+      if (mounted) setState(() { _repos = repos; _message = 'متصل فعلياً بحساب GitHub @${account['login']} — ${repos.length} مستودعاً.'; });
     } catch (error) {
       if (mounted) setState(() => _message = error.toString());
     } finally {

@@ -31,15 +31,23 @@ static PtyHandle *from_handle(jlong value) {
 }
 
 JNIEXPORT jlong JNICALL Java_com_aram_termaix_PtyNative_nativeSpawn(
-    JNIEnv *env, jclass clazz, jstring working_directory, jint rows, jint columns) {
+    JNIEnv *env, jclass clazz, jstring working_directory, jint rows, jint columns, jstring github_token) {
     (void)clazz;
     const char *cwd = NULL;
+    const char *token = NULL;
     if (working_directory != NULL) cwd = (*env)->GetStringUTFChars(env, working_directory, NULL);
+    if (github_token != NULL) token = (*env)->GetStringUTFChars(env, github_token, NULL);
+    if (github_token != NULL && token == NULL) {
+        if (cwd != NULL) (*env)->ReleaseStringUTFChars(env, working_directory, cwd);
+        if (token != NULL) (*env)->ReleaseStringUTFChars(env, github_token, token);
+        return 0;
+    }
 
     int master = posix_openpt(O_RDWR | O_NOCTTY);
     if (master < 0 || grantpt(master) != 0 || unlockpt(master) != 0) {
         if (master >= 0) close(master);
         if (cwd != NULL) (*env)->ReleaseStringUTFChars(env, working_directory, cwd);
+        if (token != NULL) (*env)->ReleaseStringUTFChars(env, github_token, token);
         return 0;
     }
 
@@ -47,6 +55,7 @@ JNIEXPORT jlong JNICALL Java_com_aram_termaix_PtyNative_nativeSpawn(
     if (slave_name == NULL) {
         close(master);
         if (cwd != NULL) (*env)->ReleaseStringUTFChars(env, working_directory, cwd);
+        if (token != NULL) (*env)->ReleaseStringUTFChars(env, github_token, token);
         return 0;
     }
     char slave_path[256];
@@ -56,6 +65,7 @@ JNIEXPORT jlong JNICALL Java_com_aram_termaix_PtyNative_nativeSpawn(
     if (child < 0) {
         close(master);
         if (cwd != NULL) (*env)->ReleaseStringUTFChars(env, working_directory, cwd);
+        if (token != NULL) (*env)->ReleaseStringUTFChars(env, github_token, token);
         return 0;
     }
 
@@ -76,12 +86,28 @@ JNIEXPORT jlong JNICALL Java_com_aram_termaix_PtyNative_nativeSpawn(
         (void)ioctl(STDIN_FILENO, TIOCSWINSZ, &window);
         (void)setenv("TERM", "xterm-256color", 1);
         (void)setenv("HOME", "/data/local/tmp", 0);
+        if (token != NULL) {
+            size_t token_length = strlen(token);
+            int valid = token_length >= 20 && token_length <= 256;
+            for (size_t i = 0; valid && i < token_length; ++i) {
+                unsigned char ch = (unsigned char)token[i];
+                int allowed = (ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) ||
+                    (ch >= 48 && ch <= 57) || ch == 95 || ch == 45;
+                if (!allowed) valid = 0;
+            }
+            if (valid) {
+                (void)setenv("GH_TOKEN", token, 1);
+                (void)setenv("GITHUB_TOKEN", token, 1);
+                (void)setenv("GIT_TERMINAL_PROMPT", "0", 1);
+            }
+        }
         if (cwd != NULL && cwd[0] != '\0') (void)chdir(cwd);
         execl("/system/bin/sh", "sh", "-i", (char *)NULL);
         _exit(127);
     }
 
     if (cwd != NULL) (*env)->ReleaseStringUTFChars(env, working_directory, cwd);
+    if (token != NULL) (*env)->ReleaseStringUTFChars(env, github_token, token);
     struct winsize window;
     memset(&window, 0, sizeof(window));
     window.ws_row = (unsigned short)(rows > 0 ? rows : 28);

@@ -14,6 +14,13 @@ class GitHubService {
     return {'Authorization': 'Bearer $token', 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json'};
   }
 
+  Future<Map<String, dynamic>> authenticatedUser() async {
+    final response = await _client.get(Uri.parse('$_api/user'), headers: await _headers());
+    final data = _decode(response);
+    if (data is! Map<String, dynamic>) throw const FormatException('Unexpected GitHub user response');
+    return data;
+  }
+
   Future<List<Map<String, dynamic>>> repositories({int page = 1}) async {
     final response = await _client.get(Uri.parse('$_api/user/repos?sort=updated&per_page=50&page=$page'), headers: await _headers());
     final data = _decode(response);
