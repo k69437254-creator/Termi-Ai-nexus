@@ -86,6 +86,11 @@ jobs:
       - name: Analyze Dart code
         run: flutter analyze
 
+      - name: Run Android JVM unit tests
+        run: |
+          cd android
+          ./gradlew :app:testDebugUnitTest --no-daemon
+
       - name: Run Flutter tests
         run: flutter test --reporter expanded
 

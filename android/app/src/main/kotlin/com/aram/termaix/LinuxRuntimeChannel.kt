@@ -130,22 +130,24 @@ object LinuxRuntimeChannel {
             val archive = File(downloadDir, "ubuntu-base-24.04.5-base-arm64.tar.gz")
             downloadAndVerify(archive)
 
-            // Extract with Android's host Toybox, not from inside the not-yet-built
-            // guest. This avoids asking PRoot to resolve guest paths while creating them.
-            val extraction = runHostTar(context, archive, target)
+            // Extract the verified rootfs with the in-app Commons Compress extractor.
+            // Preserve guest absolute symlinks for PRoot to resolve inside Ubuntu.
+            val extraction = runHostTar(archive, target)
             requireSuccess("استخراج Ubuntu Base مباشرة من Android", extraction)
             validateUbuntuBase(target)
 
             prepareGuestConfig(context, target)
-            // Prove that PRoot can execute the guest shell before invoking apt or any
-            // package installation command. This turns the previous vague failure
-            // into a precise extraction / ELF-loader / PRoot diagnostic.
+            // Prove that PRoot can execute Bash, resolve its guest ELF loader, and read
+            // Ubuntu release metadata before invoking apt or installing packages.
             val bashProbe = runProot(
                 context = context,
                 root = target,
                 extraBinds = emptyList(),
                 workingDirectory = "/root",
-                command = listOf("/bin/bash", "--version"),
+                command = listOf(
+                    "/bin/bash", "-c",
+                    "set -e; test -r /etc/os-release; . /etc/os-release; test -n \"\${PRETTY_NAME:-}\"; printf 'Ubuntu guest: %s\\n' \"\$PRETTY_NAME\"; /bin/bash --version"
+                ),
                 timeoutMs = 30_000L
             )
             requireSuccess("اختبار تشغيل Bash داخل PRoot قبل تثبيت الحزم", bashProbe)
@@ -239,49 +241,15 @@ object LinuxRuntimeChannel {
             connection.disconnect()
         }
     }
-
-    /** Extracts the official rootfs with Android Toybox outside the guest PRoot. */
-    private fun runHostTar(context: Context, archive: File, destination: File): ProcessResult {
-        check(archive.isFile && archive.length() > 0L) {
-            "ملف Ubuntu Base غير موجود أو فارغ قبل فك الضغط: ${archive.absolutePath}"
+    /** Extracts the verified Ubuntu rootfs with the in-app Commons Compress extractor. */
+    private fun runHostTar(archive: File, destination: File): ProcessResult {
+        return try {
+            val summary = UbuntuTarExtractor.extract(archive, destination)
+            ProcessResult(0, summary, false)
+        } catch (error: Exception) {
+            val detail = error.message ?: error.javaClass.simpleName
+            ProcessResult(1, "فشل مستخرج Ubuntu الآمن: $detail", false)
         }
-        check(File("/system/bin/toybox").isFile) {
-            "أداة Android Toybox غير موجودة في /system/bin/toybox."
-        }
-        val builder = ProcessBuilder(
-            "/system/bin/toybox", "tar", "-xzpf",
-            archive.absolutePath, "-C", destination.absolutePath
-        ).directory(context.filesDir).redirectErrorStream(true)
-        builder.environment()["TMPDIR"] = context.cacheDir.absolutePath
-
-        val process = builder.start()
-        val bytes = ByteArrayOutputStream()
-        val reader = thread(name = "termai-ubuntu-host-tar-output", isDaemon = true) {
-            try {
-                process.inputStream.use { input ->
-                    val buffer = ByteArray(4096)
-                    while (true) {
-                        val count = input.read(buffer)
-                        if (count < 0) break
-                        synchronized(bytes) {
-                            val remaining = (OUTPUT_LIMIT - bytes.size()).coerceAtLeast(0)
-                            if (remaining > 0) bytes.write(buffer, 0, minOf(count, remaining))
-                        }
-                    }
-                }
-            } catch (_: Throwable) {
-                // Process termination closes the pipe.
-            }
-        }
-        val finished = process.waitFor(8 * 60 * 1000L, TimeUnit.MILLISECONDS)
-        if (!finished) {
-            process.destroy()
-            if (!process.waitFor(500, TimeUnit.MILLISECONDS)) process.destroyForcibly()
-            process.waitFor()
-        }
-        reader.join(2_000)
-        val output = synchronized(bytes) { bytes.toString(Charsets.UTF_8.name()) }
-        return ProcessResult(if (finished) process.exitValue() else -1, output, !finished)
     }
 
     /**
@@ -310,17 +278,16 @@ object LinuxRuntimeChannel {
         check(interpreter.startsWith("/")) {
             "تعذر تحديد محمّل ELF الديناميكي لملف /bin/bash."
         }
-        val loaderRelative = interpreter.removePrefix("/")
-        check(loaderRelative.split('/').none { it == ".." || it.isEmpty() }) {
+        val loaderComponents = interpreter.removePrefix("/").split('/')
+        check(loaderComponents.isNotEmpty() &&
+            loaderComponents.none { it.isEmpty() || it == "." || it == ".." }) {
             "مسار محمّل ELF غير آمن داخل Ubuntu: $interpreter"
         }
-        val loader = File(root, loaderRelative)
-        check(loader.exists() && loader.isFile) {
-            "ملف /bin/bash موجود لكن محمّل ELF المطلوب مفقود من Ubuntu: $interpreter. هذا يفسر رسالة PRoot: '/bin/bash' not found."
-        }
-        check(isUnderRoot(canonicalRoot, loader.canonicalFile)) {
-            "محمّل ELF الخاص بـ Bash يشير إلى خارج جذر Ubuntu: ${loader.canonicalPath}"
-        }
+        // PT_INTERP is an absolute path in the guest namespace. Do not call
+        // File.exists(), canonicalFile, or canonicalPath for it on Android:
+        // those APIs resolve "/lib/..." from the phone's host root, not Ubuntu.
+        // The PRoot preflight below proves that the guest loader is actually usable.
+
     }
 
     private fun isUnderRoot(root: File, candidate: File): Boolean {
