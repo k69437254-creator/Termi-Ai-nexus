@@ -142,7 +142,10 @@ class ProjectExecutionService : Service() {
         result: MethodChannel.Result
     ) {
         if (activeProjectId != projectId) {
-            if (activeProjectId == null) {
+            if (pendingProjectIds.remove(projectId)) {
+                pendingCancellationProjectIds.remove(projectId)
+                result.success(true)
+            } else if (activeProjectId == null) {
                 pendingCancellationProjectIds.add(projectId)
                 result.success(true)
             } else {
