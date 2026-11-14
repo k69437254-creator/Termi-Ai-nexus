@@ -73,6 +73,7 @@ class ProjectExecutionService : Service() {
             flutterEngine = engine
 
             AramEngineChannel.register(engine, applicationContext, null)
+            AgentCommandChannel.register(engine, applicationContext)
 
             val channel = MethodChannel(
                 engine.dartExecutor.binaryMessenger,

@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:termiai_nexus/core/agent_command_executor.dart';
 import 'package:termiai_nexus/core/agent_tool_runtime.dart';
 import 'package:termiai_nexus/core/project_workspace.dart';
 
@@ -128,3 +129,74 @@ void main() {
     expect(empty['ok'], isFalse);
     expect(invalid['ok'], isFalse);
   });
+
+
+  test('passes an allowlisted command to the executor', () async {
+    final fake = _FakeAgentCommandExecutor();
+    final subject = AgentToolRuntime(
+      ProjectWorkspace(root.path),
+      commandExecutor: fake,
+    );
+    final result = await subject.execute('run_command', {
+      'command': 'ls',
+      'args': ['lib'],
+    });
+    expect(result['ok'], isTrue);
+    expect(fake.calls, 1);
+    expect(fake.lastWorkspacePath, root.path);
+    expect(fake.lastCommand, 'ls');
+    expect(fake.lastArguments, ['lib']);
+    expect(fake.lastWorkingDirectory, '.');
+  });
+
+  test('rejects disallowed commands before executor call', () async {
+    final fake = _FakeAgentCommandExecutor();
+    final subject = AgentToolRuntime(
+      ProjectWorkspace(root.path),
+      commandExecutor: fake,
+    );
+    final result = await subject.execute('run_command', {
+      'command': 'rm',
+      'args': ['-rf', '.'],
+    });
+    expect(result['ok'], isFalse);
+    expect(fake.calls, 0);
+  });
+
+  test('rejects non-text command arguments before executor call', () async {
+    final fake = _FakeAgentCommandExecutor();
+    final subject = AgentToolRuntime(
+      ProjectWorkspace(root.path),
+      commandExecutor: fake,
+    );
+    final result = await subject.execute('run_command', {
+      'command': 'ls',
+      'args': ['lib', 42],
+    });
+    expect(result['ok'], isFalse);
+    expect(fake.calls, 0);
+  });
+}
+
+class _FakeAgentCommandExecutor implements AgentCommandExecutor {
+  int calls = 0;
+  String? lastWorkspacePath;
+  String? lastCommand;
+  List<String>? lastArguments;
+  String? lastWorkingDirectory;
+
+  @override
+  Future<Map<String, dynamic>> run({
+    required String workspacePath,
+    required String command,
+    required List<String> arguments,
+    required String workingDirectory,
+  }) async {
+    calls++;
+    lastWorkspacePath = workspacePath;
+    lastCommand = command;
+    lastArguments = arguments;
+    lastWorkingDirectory = workingDirectory;
+    return {'ok': true, 'output': 'fake output'};
+  }
+}

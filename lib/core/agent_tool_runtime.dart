@@ -1,9 +1,11 @@
+import 'agent_command_executor.dart';
 import 'project_workspace.dart';
 
 class AgentToolRuntime {
-  AgentToolRuntime(this.workspace);
+  AgentToolRuntime(this.workspace, {this.commandExecutor});
 
   final ProjectWorkspace workspace;
+  final AgentCommandExecutor? commandExecutor;
 
   Future<Map<String, dynamic>> execute(
     String toolName,
@@ -42,6 +44,41 @@ class AgentToolRuntime {
           relativePath: path as String? ?? '',
         );
         return {'ok': true, 'query': query, 'path': path ?? '.', ...result};
+      } catch (error) {
+        return {'ok': false, 'error': error.toString()};
+      }
+    }
+
+    if (toolName == 'run_command') {
+      final executor = commandExecutor;
+      if (executor == null) {
+        return {'ok': false, 'error': 'Command execution is unavailable.'};
+      }
+      const allowed = {
+        'pwd', 'ls', 'grep', 'wc', 'head',
+        'tail', 'stat', 'uname', 'id',
+      };
+      final command = arguments['command'];
+      final rawArgs = arguments['args'] ?? const [];
+      final cwd = arguments['workingDirectory'] ?? '.';
+      if (command is! String || !allowed.contains(command)) {
+        return {'ok': false, 'error': 'Command is not allowed.'};
+      }
+      if (rawArgs is! List ||
+          rawArgs.length > 2 ||
+          rawArgs.any((value) => value is! String)) {
+        return {'ok': false, 'error': 'Invalid command arguments.'};
+      }
+      if (cwd is! String || cwd.trim().isEmpty) {
+        return {'ok': false, 'error': 'Invalid working directory.'};
+      }
+      try {
+        return await executor.run(
+          workspacePath: workspace.rootPath,
+          command: command,
+          arguments: List<String>.from(rawArgs),
+          workingDirectory: cwd,
+        );
       } catch (error) {
         return {'ok': false, 'error': error.toString()};
       }
