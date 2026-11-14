@@ -323,5 +323,4 @@ class _ProjectDetailsState extends State<_ProjectDetails> {
       );
         },
       );
-  }
 }

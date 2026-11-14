@@ -74,16 +74,17 @@ Future<void> projectExecutionEntrypoint(List<String> args) async {
       }
     }
 
-    if (project == null) {
+    final activeProject = project;
+    if (activeProject == null) {
       throw StateError('لم يتم العثور على المشروع المطلوب.');
     }
 
     final result = await coordinator.execute(
-      project,
+      activeProject,
       control: control,
       onTaskChanged: (task) {
         final taskNumber =
-            project.tasks.indexWhere((item) => item.id == task.id) + 1;
+            activeProject.tasks.indexWhere((item) => item.id == task.id) + 1;
         unawaited(
           _projectExecutionServiceChannel
               .invokeMethod<void>(
@@ -92,7 +93,7 @@ Future<void> projectExecutionEntrypoint(List<String> args) async {
                   'projectId': projectId,
                   'taskTitle': task.title,
                   'taskNumber': taskNumber,
-                  'taskCount': project.tasks.length,
+                  'taskCount': activeProject.tasks.length,
                   'status': task.status.name,
                   'result': task.result,
                 },
