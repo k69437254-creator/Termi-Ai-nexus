@@ -331,7 +331,11 @@ class ProjectExecutionManager {
 
       task.status = saved.status;
       task.result = saved.result;
-      onTaskChanged?.call(task);
+      try {
+        onTaskChanged?.call(task);
+      } catch (_) {
+        // UI observers must not interrupt background project execution.
+      }
     }
   }
 
