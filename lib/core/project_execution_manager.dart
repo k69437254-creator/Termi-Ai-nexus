@@ -65,17 +65,36 @@ class ProjectExecutionManager {
     }
 
     if (queuedJob != null) {
-      _queue.remove(queuedJob);
+      final previousStatuses = <PlanTask, TaskStatus>{};
+      final previousResults = <PlanTask, String>{};
+
       for (final task in queuedJob.project.tasks) {
         if (task.status != TaskStatus.pending) continue;
+        previousStatuses[task] = task.status;
+        previousResults[task] = task.result;
         task.status = TaskStatus.interrupted;
         task.result = 'أُلغي المشروع قبل بدء التنفيذ.';
+      }
+
+      try {
+        await _coordinator.save(queuedJob.project);
+      } catch (_) {
+        for (final entry in previousStatuses.entries) {
+          entry.key.status = entry.value;
+          entry.key.result = previousResults[entry.key] ?? '';
+        }
+        rethrow;
+      }
+
+      _queue.remove(queuedJob);
+      _queuedOrRunningProjectIds.remove(projectId);
+
+      for (final task in previousStatuses.keys) {
         try {
           queuedJob.onTaskChanged?.call(task);
         } catch (_) {}
       }
-      await _coordinator.save(queuedJob.project);
-      _queuedOrRunningProjectIds.remove(projectId);
+
       if (!queuedJob.completer.isCompleted) {
         queuedJob.completer.complete(queuedJob.project);
       }
