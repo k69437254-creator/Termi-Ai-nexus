@@ -77,4 +77,48 @@ void main() {
     expect(result['ok'], isFalse);
   });
 
-}
+  test('searches project files and returns matching line numbers', () async {
+    await Directory('${root.path}/lib').create();
+    await File('${root.path}/lib/sample.dart')
+        .writeAsString('first line\nTargetNeedle appears here\nthird line');
+    final result = await runtime.execute(
+      'search_files',
+      {'query': 'targetneedle', 'path': 'lib'},
+    );
+    expect(result['ok'], isTrue);
+    final matches = result['results'] as List;
+    expect(
+      matches.any((e) =>
+          e['path'] == 'lib/sample.dart' &&
+          e['line'] == 2 &&
+          (e['snippet'] as String).contains('TargetNeedle')),
+      isTrue,
+    );
+  });
+
+  test('does not expose secret assignment lines in search results', () async {
+    await File('${root.path}/config.txt').writeAsString(
+      'API_KEY=super-secret-value\nordinary matching text',
+    );
+    final result = await runtime.execute(
+      'search_files',
+      {'query': 'super-secret-value'},
+    );
+    expect(result['ok'], isTrue);
+    expect(result['results'], isEmpty);
+  });
+
+  test('rejects search paths outside the workspace', () async {
+    final result = await runtime.execute(
+      'search_files',
+      {'query': 'needle', 'path': '../'},
+    );
+    expect(result['ok'], isFalse);
+  });
+
+  test('rejects empty or non-text search queries', () async {
+    final empty = await runtime.execute('search_files', {'query': ' '});
+    final invalid = await runtime.execute('search_files', {'query': 42});
+    expect(empty['ok'], isFalse);
+    expect(invalid['ok'], isFalse);
+  });

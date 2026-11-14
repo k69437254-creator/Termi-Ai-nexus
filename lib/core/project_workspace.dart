@@ -260,6 +260,145 @@ class ProjectWorkspace {
     return entries;
   }
 
+  Future<Map<String, dynamic>> searchFiles(
+    String query, {
+    String relativePath = '',
+  }) async {
+    final needle = query.trim();
+    if (needle.isEmpty || needle.length > 256) {
+      throw FormatException('Search query must contain 1 to 256 characters.');
+    }
+    final normalized = relativePath.trim().isEmpty
+        ? ''
+        : p.normalize(relativePath.replaceAll('\\', '/'));
+    if (normalized.isNotEmpty && !ApprovalPolicy.validRelativePath(relativePath)) {
+      throw FormatException('Rejected unsafe search path: $relativePath');
+    }
+    final target = normalized.isEmpty
+        ? rootPath
+        : p.normalize(p.join(rootPath, normalized));
+    if (target != rootPath && !p.isWithin(rootPath, target)) {
+      throw FormatException('Search path escaped workspace: $relativePath');
+    }
+
+    var cursor = rootPath;
+    if (normalized.isNotEmpty) {
+      for (final segment in normalized.split('/')) {
+        cursor = p.join(cursor, segment);
+        if (await FileSystemEntity.type(cursor, followLinks: false) ==
+            FileSystemEntityType.link) {
+          throw FormatException('Symlink access is forbidden: $relativePath');
+        }
+      }
+    }
+    if (await FileSystemEntity.type(target, followLinks: false) !=
+        FileSystemEntityType.directory) {
+      throw FileSystemException('Search directory not found', target);
+    }
+
+    const ignoredDirectories = {
+      '.git', '.termai', '.dart_tool', '.gradle', '.idea', '.vscode',
+      'build', 'node_modules', 'vendor', 'coverage', '.next', 'dist',
+    };
+    const ignoredExtensions = {
+      '.pem', '.p12', '.pfx', '.jks', '.keystore', '.key',
+      '.db', '.sqlite', '.sqlite3', '.der', '.cer', '.gpg', '.asc',
+    };
+    const ignoredNames = {
+      '.npmrc', '.pypirc', '.netrc', '.git-credentials',
+      'google-services.json',
+    };
+    final secretName = RegExp(
+      r'(^|[._-])(secret|secrets|credential|credentials|token|password|private|apikey|api_key|auth|service-account)([._-]|$)',
+      caseSensitive: false,
+    );
+    final secretValueLine = RegExp(
+      r'(api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|secret|private[_-]?key)\s*[:=]\s*\S+|authorization\s*:\s*bearer\s+\S+|-----BEGIN [^-]*PRIVATE KEY-----',
+      caseSensitive: false,
+    );
+    final pending = <Directory>[Directory(target)];
+    final results = <Map<String, dynamic>>[];
+    final needleLower = needle.toLowerCase();
+    var scannedFiles = 0;
+    var visitedDirectories = 0;
+    var truncated = false;
+
+    while (pending.isNotEmpty && !truncated) {
+      final directory = pending.removeLast();
+      visitedDirectories++;
+      if (visitedDirectories > 500) {
+        truncated = true;
+        break;
+      }
+      await for (final entity in directory.list(followLinks: false)) {
+        final type = await FileSystemEntity.type(
+          entity.path,
+          followLinks: false,
+        );
+        if (type == FileSystemEntityType.link) continue;
+        final name = p.basename(entity.path);
+
+        if (type == FileSystemEntityType.directory) {
+          if (!ignoredDirectories.contains(name) && !secretName.hasMatch(name)) {
+            pending.add(Directory(entity.path));
+          }
+          continue;
+        }
+        if (type != FileSystemEntityType.file) continue;
+
+        final lower = name.toLowerCase();
+        if (name == '.env' ||
+            name.startsWith('.env.') ||
+            ignoredNames.contains(lower) ||
+            lower.startsWith('id_rsa') ||
+            lower.startsWith('id_ed25519') ||
+            secretName.hasMatch(name) ||
+            ignoredExtensions.any(lower.endsWith)) {
+          continue;
+        }
+
+        if (scannedFiles >= 250) {
+          truncated = true;
+          break;
+        }
+        scannedFiles++;
+
+        final file = File(entity.path);
+        final size = await file.length();
+        if (size == 0 || size > 128 * 1024) continue;
+        final bytes = await file.readAsBytes();
+        if (bytes.contains(0)) continue;
+        final content = utf8.decode(bytes, allowMalformed: true);
+        final lines = content.split('\n');
+
+        for (var i = 0; i < lines.length; i++) {
+          final line = lines[i];
+          if (secretValueLine.hasMatch(line)) continue;
+          if (!line.toLowerCase().contains(needleLower)) continue;
+          final snippet = line.trim();
+          results.add({
+            'path': p.relative(entity.path, from: rootPath).replaceAll('\\', '/'),
+            'line': i + 1,
+            'snippet': snippet.length > 240
+                ? '${snippet.substring(0, 240)}…'
+                : snippet,
+          });
+          if (results.length >= 50) {
+            truncated = true;
+            break;
+          }
+        }
+        if (truncated) break;
+      }
+    }
+
+    return {
+      'results': results,
+      'scannedFiles': scannedFiles,
+      'truncated': truncated || pending.isNotEmpty,
+    };
+  }
+
   Future<String> readTextFile(String relativePath) async {
     if (!ApprovalPolicy.validRelativePath(relativePath)) {
       throw FormatException('Rejected unsafe path: $relativePath');

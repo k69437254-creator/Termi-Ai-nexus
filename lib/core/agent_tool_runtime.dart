@@ -27,6 +27,26 @@ class AgentToolRuntime {
       }
     }
 
+    if (toolName == 'search_files') {
+      final query = arguments['query'];
+      final path = arguments['path'];
+      if (query is! String || query.trim().isEmpty || query.length > 256) {
+        return {'ok': false, 'error': 'Query must contain 1 to 256 characters.'};
+      }
+      if (path != null && path is! String) {
+        return {'ok': false, 'error': 'Path must be text.'};
+      }
+      try {
+        final result = await workspace.searchFiles(
+          query,
+          relativePath: path as String? ?? '',
+        );
+        return {'ok': true, 'query': query, 'path': path ?? '.', ...result};
+      } catch (error) {
+        return {'ok': false, 'error': error.toString()};
+      }
+    }
+
     if (toolName != 'read_file') {
       return {'ok': false, 'error': 'Unknown tool: $toolName'};
     }
