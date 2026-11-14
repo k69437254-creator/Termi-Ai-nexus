@@ -166,6 +166,9 @@ class ProjectExecutionManager {
   Future<ProjectRecord> _watchPersistedExecution(
     _QueuedProject job,
   ) async {
+    final serviceStartTime = DateTime.now();
+    var serviceWasActive = false;
+
     while (true) {
       await Future<void>.delayed(const Duration(milliseconds: 800));
 
@@ -196,7 +199,18 @@ class ProjectExecutionManager {
         <String, Object?>{'projectId': job.project.id},
       );
 
-      if (serviceActive == false) {
+      if (serviceActive == true) {
+        serviceWasActive = true;
+      }
+
+      final startupGraceExpired = DateTime.now()
+              .difference(serviceStartTime) >=
+          const Duration(seconds: 15);
+
+      final serviceUnexpectedlyStopped = serviceActive == false &&
+          (serviceWasActive || startupGraceExpired);
+
+      if (serviceUnexpectedlyStopped) {
         var changed = false;
 
         for (final task in persisted.tasks) {
