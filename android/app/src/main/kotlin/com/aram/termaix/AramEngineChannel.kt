@@ -47,6 +47,12 @@ object AramEngineChannel {
                         )
                         result.success(true)
                     }
+                    "cancelProjectExecution" -> {
+                        val projectId = call.argument<String>("projectId")
+                            ?.trim()?.takeIf { it.isNotEmpty() }
+                            ?: throw IllegalArgumentException("معرف المشروع مفقود")
+                        ProjectExecutionService.requestCancellation(projectId, result)
+                    }
                     "start" -> {
                         context.startForegroundService(Intent(context, AramEngineService::class.java).setAction(AramEngineService.ACTION_START))
                         result.success(true)

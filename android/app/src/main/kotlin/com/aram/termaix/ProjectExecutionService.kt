@@ -17,9 +17,15 @@ import io.flutter.plugin.common.MethodChannel
 class ProjectExecutionService : Service() {
 
     private var flutterEngine: FlutterEngine? = null
+    private var serviceChannel: MethodChannel? = null
     private var activeProjectId: String? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private val pendingProjectIds = ArrayDeque<String>()
+
+    override fun onCreate() {
+        super.onCreate()
+        instance = this
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -64,10 +70,13 @@ class ProjectExecutionService : Service() {
 
             AramEngineChannel.register(engine, applicationContext, null)
 
-            MethodChannel(
+            val channel = MethodChannel(
                 engine.dartExecutor.binaryMessenger,
                 SERVICE_CHANNEL
-            ).setMethodCallHandler { call, result ->
+            )
+            serviceChannel = channel
+
+            channel.setMethodCallHandler { call, result ->
                 if (call.method != "complete") {
                     result.notImplemented()
                     return@setMethodCallHandler
@@ -109,6 +118,44 @@ class ProjectExecutionService : Service() {
         }
     }
 
+    private fun cancelProject(
+        projectId: String,
+        result: MethodChannel.Result
+    ) {
+        if (activeProjectId != projectId) {
+            result.success(false)
+            return
+        }
+
+        val channel = serviceChannel
+        if (channel == null) {
+            result.success(false)
+            return
+        }
+
+        channel.invokeMethod(
+            "cancel",
+            mapOf("projectId" to projectId),
+            object : MethodChannel.Result {
+                override fun success(value: Any?) {
+                    result.success(value == true)
+                }
+
+                override fun error(
+                    errorCode: String,
+                    errorMessage: String?,
+                    errorDetails: Any?
+                ) {
+                    result.error(errorCode, errorMessage, errorDetails)
+                }
+
+                override fun notImplemented() {
+                    result.success(false)
+                }
+            }
+        )
+    }
+
     private fun finishProject(
         projectId: String,
         success: Boolean,
@@ -123,6 +170,7 @@ class ProjectExecutionService : Service() {
 
         val oldEngine = flutterEngine
         flutterEngine = null
+        serviceChannel = null
         activeProjectId = null
         runCatching { oldEngine?.destroy() }
 
@@ -202,8 +250,10 @@ class ProjectExecutionService : Service() {
         pendingProjectIds.clear()
         runCatching { flutterEngine?.destroy() }
         flutterEngine = null
+        serviceChannel = null
         activeProjectId = null
         releaseWakeLock()
+        if (instance === this) instance = null
         super.onDestroy()
     }
 
@@ -218,5 +268,20 @@ class ProjectExecutionService : Service() {
         private const val CHANNEL_ID =
             "termi_project_execution"
         private const val NOTIFICATION_ID = 9201
+
+        @Volatile
+        private var instance: ProjectExecutionService? = null
+
+        fun requestCancellation(
+            projectId: String,
+            result: MethodChannel.Result
+        ) {
+            val service = instance
+            if (service == null) {
+                result.success(false)
+            } else {
+                service.cancelProject(projectId, result)
+            }
+        }
     }
 }

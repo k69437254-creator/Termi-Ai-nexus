@@ -55,7 +55,18 @@ class ProjectCoordinator {
       final workspace = ProjectWorkspace(project.workspacePath);
       await workspace.initialize();
       for (final task in project.tasks) {
-        if (executionControl.cancelRequested) break;
+        if (executionControl.cancelRequested) {
+          var changedPendingTasks = false;
+          for (final pendingTask in project.tasks) {
+            if (pendingTask.status != TaskStatus.pending) continue;
+            pendingTask.status = TaskStatus.interrupted;
+            pendingTask.result = 'أُلغي التنفيذ قبل بدء هذه المهمة.';
+            onTaskChanged?.call(pendingTask);
+            changedPendingTasks = true;
+          }
+          if (changedPendingTasks) await save(project);
+          break;
+        }
         if (task.status == TaskStatus.completed) continue;
 
         if (task.status == TaskStatus.running) {

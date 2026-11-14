@@ -20,6 +20,7 @@ class ProjectExecutionManager {
   final ProjectCoordinator _coordinator;
   final Queue<_QueuedProject> _queue = Queue<_QueuedProject>();
   final Set<String> _queuedOrRunningProjectIds = <String>{};
+  _QueuedProject? _activeJob;
 
   bool _draining = false;
 
@@ -53,9 +54,6 @@ class ProjectExecutionManager {
     return completer.future;
   }
 
-  /// Queued jobs can be removed safely before Android starts them.
-  /// Active-service cancellation is connected in the dedicated cancellation
-  /// integration step; this method never reports a false cancellation.
   Future<bool> cancel(String projectId) async {
     _QueuedProject? queuedJob;
 
@@ -66,15 +64,52 @@ class ProjectExecutionManager {
       }
     }
 
-    if (queuedJob == null) return false;
-
-    _queue.remove(queuedJob);
-    _queuedOrRunningProjectIds.remove(projectId);
-
-    if (!queuedJob.completer.isCompleted) {
-      queuedJob.completer.complete(queuedJob.project);
+    if (queuedJob != null) {
+      _queue.remove(queuedJob);
+      for (final task in queuedJob.project.tasks) {
+        if (task.status != TaskStatus.pending) continue;
+        task.status = TaskStatus.interrupted;
+        task.result = 'أُلغي المشروع قبل بدء التنفيذ.';
+        try {
+          queuedJob.onTaskChanged?.call(task);
+        } catch (_) {}
+      }
+      await _coordinator.save(queuedJob.project);
+      _queuedOrRunningProjectIds.remove(projectId);
+      if (!queuedJob.completer.isCompleted) {
+        queuedJob.completer.complete(queuedJob.project);
+      }
+      return true;
     }
-    return true;
+
+    final active = _activeJob;
+    if (active == null || active.project.id != projectId) return false;
+    if (active.cancelRequested) return true;
+
+    active.cancelRequested = true;
+    if (!active.started) return true;
+
+    final accepted = await _requestAndroidCancellation(projectId);
+    if (!accepted) active.cancelRequested = false;
+    return accepted;
+  }
+
+  Future<bool> _requestAndroidCancellation(String projectId) async {
+    for (var attempt = 0; attempt < 10; attempt++) {
+      try {
+        final accepted = await _engineChannel.invokeMethod<bool>(
+          'cancelProjectExecution',
+          <String, Object?>{'projectId': projectId},
+        );
+        if (accepted == true) return true;
+      } on MissingPluginException {
+        return false;
+      } on PlatformException {
+        // The service may still be completing its startup handshake.
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+    return false;
   }
 
   Future<void> _drain() async {
@@ -84,9 +119,16 @@ class ProjectExecutionManager {
     try {
       while (_queue.isNotEmpty) {
         final job = _queue.removeFirst();
+        _activeJob = job;
 
         try {
           await _startAndroidExecution(job.project.id);
+          job.started = true;
+
+          if (job.cancelRequested) {
+            await _requestAndroidCancellation(job.project.id);
+          }
+
           final result = await _watchPersistedExecution(job);
           if (!job.completer.isCompleted) {
             job.completer.complete(result);
@@ -96,6 +138,7 @@ class ProjectExecutionManager {
             job.completer.completeError(error, stackTrace);
           }
         } finally {
+          _activeJob = null;
           _queuedOrRunningProjectIds.remove(job.project.id);
         }
       }
@@ -177,17 +220,12 @@ class ProjectExecutionManager {
   bool _isExecutionFinished(ProjectRecord project) {
     if (project.tasks.isEmpty) return false;
 
-    final stoppedWithFailure = project.tasks.any(
+    return project.tasks.every(
       (task) =>
+          task.status == TaskStatus.completed ||
           task.status == TaskStatus.failed ||
           task.status == TaskStatus.rolledBack ||
           task.status == TaskStatus.interrupted,
-    );
-
-    if (stoppedWithFailure) return true;
-
-    return project.tasks.every(
-      (task) => task.status == TaskStatus.completed,
     );
   }
 }
@@ -202,4 +240,7 @@ class _QueuedProject {
   final ProjectRecord project;
   final void Function(PlanTask task)? onTaskChanged;
   final Completer<ProjectRecord> completer;
+
+  bool started = false;
+  bool cancelRequested = false;
 }

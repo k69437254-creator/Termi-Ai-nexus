@@ -16,63 +16,95 @@ Future<void> projectExecutionEntrypoint(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   DartPluginRegistrant.ensureInitialized();
 
+  final projectId = args.isEmpty ? '' : args.first.trim();
+  final coordinator = ProjectCoordinator();
+  final control = ProjectExecutionControl();
+
   var success = false;
   String? errorMessage;
 
+  _projectExecutionServiceChannel.setMethodCallHandler((call) async {
+    if (call.method != 'cancel') {
+      throw MissingPluginException(
+        'Unsupported project service method: ${call.method}',
+      );
+    }
+
+    final data = call.arguments;
+    final requestedId = data is Map ? data['projectId']?.toString() : null;
+    if (projectId.isEmpty || requestedId != projectId) return false;
+
+    control.cancelRequested = true;
+
+    final requestId = control.requestId;
+    if (requestId != null && requestId.isNotEmpty) {
+      try {
+        await coordinator.cancelGeneration(requestId);
+      } catch (_) {
+        // The coordinator still observes the cancellation flag and rolls back.
+      }
+    }
+
+    return true;
+  });
+
   try {
-    if (args.isEmpty || args.first.trim().isEmpty) {
+    if (projectId.isEmpty) {
       throw StateError('معرف المشروع غير متوفر.');
     }
 
-    final projectId = args.first.trim();
-    final coordinator = ProjectCoordinator();
+    final projects = await coordinator.listProjects();
+    ProjectRecord? project;
 
-    try {
-      final projects = await coordinator.listProjects();
-      ProjectRecord? project;
-
-      for (final item in projects) {
-        if (item.id == projectId) {
-          project = item;
-          break;
-        }
+    for (final item in projects) {
+      if (item.id == projectId) {
+        project = item;
+        break;
       }
+    }
 
-      if (project == null) {
-        throw StateError('لم يتم العثور على المشروع المطلوب.');
-      }
+    if (project == null) {
+      throw StateError('لم يتم العثور على المشروع المطلوب.');
+    }
 
-      final result = await coordinator.execute(project);
-      success = result.tasks.isNotEmpty &&
-          result.tasks.every((task) => task.status == TaskStatus.completed);
+    final result = await coordinator.execute(
+      project,
+      control: control,
+    );
 
-      if (!success) {
-        final incomplete = result.tasks
-            .where((task) => task.status != TaskStatus.completed)
-            .map((task) => '${task.title}: ${task.status.name}')
-            .join(' | ');
-        errorMessage = incomplete.isEmpty
-            ? 'لم تكتمل مهام المشروع.'
-            : incomplete;
-      }
-    } finally {
-      coordinator.gateway.dispose();
+    success = !control.cancelRequested &&
+        result.tasks.isNotEmpty &&
+        result.tasks.every((task) => task.status == TaskStatus.completed);
+
+    if (!success) {
+      final incomplete = result.tasks
+          .where((task) => task.status != TaskStatus.completed)
+          .map((task) => '${task.title}: ${task.status.name}')
+          .join(' | ');
+      errorMessage = control.cancelRequested
+          ? 'أُلغي التنفيذ بناءً على طلب المستخدم.'
+          : incomplete.isEmpty
+              ? 'لم تكتمل مهام المشروع.'
+              : incomplete;
     }
   } catch (error) {
     errorMessage = error.toString();
+  } finally {
+    _projectExecutionServiceChannel.setMethodCallHandler(null);
+    coordinator.gateway.dispose();
   }
 
   try {
     await _projectExecutionServiceChannel.invokeMethod<void>(
       'complete',
       <String, Object?>{
-        'projectId': args.isEmpty ? '' : args.first,
+        'projectId': projectId,
         'success': success,
         'error': errorMessage,
       },
     );
   } catch (_) {
-    // The Android service owns recovery if the completion channel is lost.
+    // Android service owns completion handling.
   }
 }
 
