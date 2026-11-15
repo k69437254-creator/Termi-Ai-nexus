@@ -59,7 +59,7 @@ void main() {
     final result = await runtime.execute('read_file', {'path': 'large.txt'});
     expect(result['ok'], isTrue);
     expect(result['truncated'], isTrue);
-    expect((result['content'] as String).length, 16000);
+    expect((result['content'] as String).length, 8000);
   });
 
 
