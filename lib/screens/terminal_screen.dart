@@ -8,7 +8,6 @@ import 'package:path_provider/path_provider.dart';
 
 import '../core/approval_policy.dart';
 import '../core/linux_runtime_service.dart';
-import '../core/nexus_theme.dart';
 import '../core/pty_service.dart';
 import '../core/secure_vault.dart';
 
