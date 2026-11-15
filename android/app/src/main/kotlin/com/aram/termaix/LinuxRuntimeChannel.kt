@@ -8,6 +8,7 @@ import android.os.Looper
 import android.os.StatFs
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugin.common.EventChannel
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -34,6 +35,33 @@ object LinuxRuntimeChannel {
     private const val MIN_FREE_BYTES = 1200L * 1024L * 1024L
     private const val OUTPUT_LIMIT = 96 * 1024
     private val installing = AtomicBoolean(false)
+    @Volatile private var installEventSink: EventChannel.EventSink? = null
+
+    private fun emitInstallProgress(
+        handler: Handler,
+        stage: String,
+        message: String,
+        downloadedBytes: Long? = null,
+        totalBytes: Long? = null
+    ) {
+        val percent = if (downloadedBytes != null && totalBytes != null && totalBytes > 0L) {
+            downloadedBytes.toDouble() * 100.0 / totalBytes.toDouble()
+        } else null
+
+        handler.post {
+            installEventSink?.success(
+                mapOf<String, Any?>(
+                    "stage" to stage,
+                    "message" to message,
+                    "downloadedBytes" to downloadedBytes,
+                    "totalBytes" to totalBytes,
+                    "remainingBytes" to if (downloadedBytes != null && totalBytes != null)
+                        (totalBytes - downloadedBytes).coerceAtLeast(0L) else null,
+                    "percent" to percent
+                )
+            )
+        }
+    }
     private val agentCommands = setOf(
         "pwd", "ls", "find", "grep", "rg", "cat", "sed", "awk", "wc",
         "head", "tail", "stat", "git", "gh", "python3", "python", "pip3",
@@ -46,6 +74,19 @@ object LinuxRuntimeChannel {
 
     fun register(engine: FlutterEngine, context: Context) {
         val app = context.applicationContext
+
+        EventChannel(
+            engine.dartExecutor.binaryMessenger,
+            "termai/linux/install-events"
+        ).setStreamHandler(object : EventChannel.StreamHandler {
+            override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
+                installEventSink = events
+            }
+
+            override fun onCancel(arguments: Any?) {
+                installEventSink = null
+            }
+        })
         MethodChannel(engine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "runProjectCommand" -> {
@@ -87,9 +128,16 @@ object LinuxRuntimeChannel {
                     val mainHandler = Handler(Looper.getMainLooper())
                     thread(name = "termai-linux-install", isDaemon = true) {
                         try {
-                            val details = install(app)
+                            val details = install(app) { stage, message, downloaded, total ->
+                                emitInstallProgress(mainHandler, stage, message, downloaded, total)
+                            }
                             mainHandler.post { result.success(details) }
                         } catch (error: Throwable) {
+                            emitInstallProgress(
+                                mainHandler,
+                                "error",
+                                error.message ?: error.javaClass.simpleName
+                            )
                             mainHandler.post {
                                 result.error("LINUX_INSTALL_FAILED", error.message ?: error.javaClass.simpleName, null)
                             }
@@ -124,7 +172,11 @@ object LinuxRuntimeChannel {
         ).all { File(native, it).isFile }
     }
 
-    private fun install(context: Context): Map<String, Any> {
+    private fun install(
+        context: Context,
+        progress: (String, String, Long?, Long?) -> Unit
+    ): Map<String, Any> {
+        progress("prepare", "فحص متطلبات بيئة Linux…", null, null)
         require(Build.SUPPORTED_ABIS.any { it == "arm64-v8a" }) {
             "بيئة Ubuntu المضمّنة متاحة حالياً لأجهزة Android بمعمارية ARM64 فقط."
         }
@@ -166,17 +218,33 @@ object LinuxRuntimeChannel {
                 "تعذر إنشاء مجلدات Ubuntu المؤقتة."
             }
             val archive = File(downloadDir, "ubuntu-base-24.04.5-base-arm64.tar.gz")
-            downloadAndVerify(archive)
+            progress("download", "جارٍ تنزيل Ubuntu من خوادم Canonical…", null, null)
+            downloadAndVerify(archive) { stage, downloaded, total ->
+                val message = if (stage == "verify") {
+                    "اكتمل التنزيل؛ جارٍ التحقق من SHA-256…"
+                } else {
+                    "جارٍ تنزيل Ubuntu…"
+                }
+                progress(stage, message, downloaded, total)
+            }
 
             // Extract the verified rootfs with the in-app Commons Compress extractor.
             // Preserve guest absolute symlinks for PRoot to resolve inside Ubuntu.
+            progress("extract", "جارٍ فك ضغط ملفات Ubuntu…", null, null)
+
             val extraction = runHostTar(archive, target)
             requireSuccess("استخراج Ubuntu Base مباشرة من Android", extraction)
+            progress("validate", "جارٍ فحص ملفات Ubuntu الأساسية…", null, null)
+
             validateUbuntuBase(target)
+
+            progress("configure", "جارٍ إعداد بيئة Ubuntu وPRoot…", null, null)
 
             prepareGuestConfig(context, target)
             // Prove that PRoot can execute Bash, resolve its guest ELF loader, and read
             // Ubuntu release metadata before invoking apt or installing packages.
+            progress("bash_test", "جارٍ اختبار تشغيل Bash داخل Ubuntu…", null, null)
+
             val bashProbe = runProot(
                 context = context,
                 root = target,
@@ -190,6 +258,8 @@ object LinuxRuntimeChannel {
             )
             requireSuccess("اختبار تشغيل Bash داخل PRoot قبل تثبيت الحزم", bashProbe)
             val installPackages = "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git gh ca-certificates curl openssh-client python3 build-essential && apt-get clean && rm -rf /var/lib/apt/lists/*"
+            progress("packages", "جارٍ تثبيت Git وGitHub CLI وأدوات Linux…", null, null)
+
             val apt = runProot(
                 context = context,
                 root = target,
@@ -199,6 +269,8 @@ object LinuxRuntimeChannel {
                 timeoutMs = 18 * 60 * 1000L
             )
             requireSuccess("تثبيت Git وGitHub CLI وأدوات Linux", apt)
+
+            progress("final_verify", "جارٍ التحقق النهائي من Ubuntu والأدوات…", null, null)
 
             val verify = runProot(
                 context = context,
@@ -218,6 +290,7 @@ object LinuxRuntimeChannel {
             }
             File(target, ".termai-ubuntu-installed").writeText("Ubuntu 24.04.5 LTS ARM64\n")
             check(isInstalled(context)) { "وُضع مؤشر التثبيت لكن فشل الفحص النهائي لبيئة Ubuntu." }
+            progress("complete", "اكتملت تهيئة Ubuntu بنجاح.", null, null)
             archive.delete()
             downloadDir.deleteRecursively()
             return mapOf(
@@ -233,7 +306,10 @@ object LinuxRuntimeChannel {
         }
     }
 
-    private fun downloadAndVerify(destination: File) {
+    private fun downloadAndVerify(
+        destination: File,
+        onProgress: (String, Long, Long) -> Unit
+    ) {
         val partial = File(destination.parentFile, destination.name + ".part")
         partial.delete()
         val connection = (URL(UBUNTU_URL).openConnection() as HttpURLConnection).apply {
@@ -254,6 +330,7 @@ object LinuxRuntimeChannel {
             require(length in 1..MAX_ARCHIVE_BYTES) { "حجم Ubuntu Base غير متوقع: $length bytes" }
             val digest = MessageDigest.getInstance("SHA-256")
             var total = 0L
+            var lastReported = 0L
             connection.inputStream.use { input ->
                 FileOutputStream(partial).use { output ->
                     val buffer = ByteArray(64 * 1024)
@@ -264,11 +341,16 @@ object LinuxRuntimeChannel {
                         require(total <= MAX_ARCHIVE_BYTES) { "تجاوز ملف Ubuntu الحد المسموح للحجم." }
                         digest.update(buffer, 0, count)
                         output.write(buffer, 0, count)
+                        if (total - lastReported >= 256L * 1024L || total == length) {
+                            onProgress("download", total, length)
+                            lastReported = total
+                        }
                     }
                     output.fd.sync()
                 }
             }
             require(total == length) { "التنزيل غير مكتمل: المتوقع $length bytes وتم تنزيل $total فقط." }
+            onProgress("verify", total, length)
             val actual = digest.digest().joinToString("") { "%02x".format(it) }
             require(actual == UBUNTU_SHA256) { "فشل تحقق SHA-256 لملف Ubuntu الرسمي. لن يُفك ضغطه." }
             check(partial.renameTo(destination)) { "تعذر تثبيت ملف Ubuntu الذي تم التحقق منه." }
