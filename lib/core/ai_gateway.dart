@@ -228,7 +228,9 @@ class AiGateway {
 
   Future<List<PlanTask>> createPlan(String request, String projectId, MemoryStore memory) async {
     final teamMemory = await memory.contextFor(agentId: 'manager', projectId: projectId);
-    const system = 'أنت المدير الرئيسي في TermiAI-Nexus. حوّل طلب المستخدم إلى خطة تنفيذ عملية ومتسلسلة. أعد كائن JSON فقط دون Markdown أو شرح خارجه، بالشكل {"tasks":[{"id":"t1","title":"عنوان واضح","description":"تعليمات تنفيذ مفصلة ومحددة","agentId":"architect|developer|qa|security","risk":"low|medium|high"}]}. يجب أن تحتوي الخطة من 3 إلى 8 مهام. اجعل الخطة من 3 مهام للطلبات البسيطة، وزد العدد عند الحاجة فقط. اجعل كل مهمة قابلة للتنفيذ وتنتج ملفات فعلية عند التنفيذ. استخدم معرفات فريدة، ولا تدّع أن أي شيء نُفذ. لا تضع أوامر خطرة.';
+    const system = '''أنت المدير الرئيسي في TermiAI-Nexus.
+حوّل طلب المستخدم إلى خطة تنفيذ عملية ومتسلسلة من 3 إلى 8 مهام. أعد JSON فقط بالشكل {"tasks":[{"id":"t1","title":"...","description":"...","agentId":"architect|developer|qa|security","risk":"low|medium|high"}]}.
+يجب أن تتضمن الخطة معماريًا عند الحاجة، ومهمة مطوّر واحدة على الأقل، ومهمة QA أخيرة دائمًا. يجب أن تنشئ مهام التطوير الاختبارات اللازمة قبل بدء QA. مهمة QA هي بوابة التسليم: تفحص ملفات واختبارات المهام السابقة وتشغّل تحققاً حقيقياً عبر run_command كآخر عملية أدوات، ثم تعيد نتائج التنفيذ الفعلية دون كتابة أي ملف. يتولى المنسّق إنشاء docs/QA_REPORT.md تلقائياً بعد التحقق من الأدلة. لا تضع QA قبل آخر مهمة. وزّع العمل على تخصصات الوكلاء ولا تكرر المهام. اجعل كل مهمة تنتج ملفات فعلية عند الحاجة، ولا تدّع التنفيذ أو نجاح اختبار لم يُشغّل. لا تطلب أوامر shell مركّبة ولا عمليات حذف أو نشر/رفع.''' ;
     final firstResponse = await chat(
       agentId: 'manager',
       temperature: 0.1,
@@ -309,6 +311,12 @@ class AiGateway {
         risk: risk,
       ));
     }
+    if (!tasks.any((task) => task.agentId == 'developer')) {
+      throw const FormatException('Project plan must include a developer task.');
+    }
+    if (!tasks.any((task) => task.agentId == 'qa') || tasks.last.agentId != 'qa') {
+      throw const FormatException('Project plan must end with a QA verification task.');
+    }
     return tasks;
   }
 
@@ -322,26 +330,48 @@ class AiGateway {
     required String requestId,
     required AgentToolRuntime toolRuntime,
   }) async {
-    final context = await memory.contextFor(agentId: agentId, projectId: projectId);
-    final system = 'أنت وكيل برمجي في TermiAI-Nexus. لديك أربع أدوات: list_files لعرض مجلد، search_files للبحث داخل الملفات، read_file لقراءة ملف، وrun_command لتشغيل أمر محدود داخل مساحة العمل. استدعاء run_command يكون بالشكل {"tool_call":{"name":"run_command","arguments":{"command":"ls","args":["lib"],"workingDirectory":"."}}}. الأوامر المسموحة فقط: pwd وls وgrep وwc وhead وtail وstat وuname وid. مرر الوسائط في args كقائمة نصوص منفصلة، ولا تستخدم shell أو pipes أو خيارات تبدأ بشرطة أو أوامر مركبة. workingDirectory مسار نسبي ويكون "." افتراضياً. لا تحاول تجاوز رفض أي أمر أو مسار. استخدم الأدوات عند الحاجة فقط. بعد تلقي نتيجة الأداة أعد JSON نهائياً بالشكل {"summary":"...","files":[{"path":"relative/path","content":"full file content"}],"verification":["..."],"risks":[]}. لا تضع نصاً خارج JSON، ولا تختلق نتائج اختبار.';
-    var conversation = 'السياق والذاكرة:\n$context\n\nالمهمة: $taskTitle\n$taskDescription\n\nسياق مساحة العمل:\n$workspaceContext';
-    for (var call = 0; call <= 4; call++) {
+    final context = _trim(
+      await memory.contextFor(agentId: agentId, projectId: projectId),
+      4000,
+    );
+    final roleInstructions = switch (agentId) {
+      'architect' => 'دورك المعماري: اقرأ بنية المشروع أولاً، حدّد العقود والاعتماديات ونقاط الدخول، واكتب وثيقة التصميم والواجهات بين الوحدات. لا تنفذ تغييرات خارج نطاق التصميم.',
+      'developer' => 'دورك المطوّر: نفّذ المطلوب فعلياً في ملفات المصدر، حافظ على أسلوب المشروع، أضف الاعتماديات الضرورية إلى ملفات تعريفها فقط، واكتب كوداً مترابطاً لا ملفات شكلية أو TODOs بديلة.',
+      'qa' => 'دورك مهندس الجودة وبوابة التسليم الأخيرة: افحص ملفات المشروع والاختبارات السابقة، ثم شغّل تحققاً حقيقياً عبر run_command. لا تنشئ أو تعدّل أي ملف ولا تستخدم write_file_chunk. اجعل آخر استدعاء أداة أمراً للتحقق. أعد JSON نهائياً يتضمن summary و stagedFiles فارغة و verification و risks. لا تعتبر وجود اختبار أو اقتراح فحص دليلاً على النجاح. لا تدّع نجاحاً إذا كانت الأداة غير متاحة أو فشل الأمر؛ اذكر ذلك بوضوح. المنسّق سينشئ تقرير QA بعد استلام أدلتك الفعلية.',
+      'security' => 'دورك مهندس الأمن: افحص الصلاحيات ومسارات الملفات والأسرار والاعتماديات والإعدادات، أصلح المخاطر داخل نطاق المهمة، ولا تنفذ حذفاً أو نشرًا أو git push أو تغييرات صلاحيات خارجية.',
+      _ => 'نفّذ المهمة ضمن الدور المحدد ولا تدّع تنفيذ شيء لم تنفذه.',
+    };
+    final availableTools = agentId == 'qa'
+        ? 'list_files، search_files، read_file، run_command'
+        : 'list_files، search_files، read_file، write_file_chunk، run_command';
+    final roleToolInstructions = agentId == 'qa'
+        ? 'أنت وكيل QA للقراءة والتحقق فقط. لا تكتب ملفات ولا تطلب staging. افحص المشروع ثم نفّذ أمراً حقيقياً للتحقق كآخر استدعاء أداة. أعد JSON فقط بالشكل {"summary":"...","stagedFiles":[],"verification":["..."],"risks":[]}، ولا تضع ملفات legacy في files.'
+        : 'استخدم list_files/search_files/read_file لفهم الملفات قبل تعديلها. أنشئ الملفات عبر write_file_chunk بالشكل {"tool_call":{"name":"write_file_chunk","arguments":{"path":"lib/example.dart","content":"محتوى الملف أو جزء منه","mode":"create|append"}}}. استخدم create لأول جزء ثم append للبقية. اجعل كل جزء نحو 6 KB أو أقل. بعد إنهاء الملفات أعد JSON فقط بالشكل {"summary":"...","stagedFiles":["relative/path"],"verification":["..."],"risks":[]} وأدرج كل المسارات التي كتبتها.';
+    final system = '''أنت وكيل متخصص في TermiAI-Nexus.
+$roleInstructions
+الأدوات المتاحة لهذا الدور فقط: $availableTools.
+$roleToolInstructions
+تشغيل الأوامر يتم داخل Ubuntu/PRoot وبوسائط argv منفصلة، وليس داخل Android host. استدعاء run_command بالشكل {"tool_call":{"name":"run_command","arguments":{"command":"flutter","args":["test"],"workingDirectory":"."}}}. لا تستخدم bash -c أو sh -c أو pipes أو أوامر حذف أو git push/commit/reset/clean أو عمليات GitHub الكتابية. عند تعذر أمر، اقرأ الخطأ ولا تزعم نجاحه.
+لا تضع نصاً خارج JSON ولا تختلق نتائج اختبار.''';
+    final baseConversation = 'سياق الذاكرة:\n$context\n\nالمهمة: $taskTitle\n$taskDescription\n\nسياق المشروع الحالي:\n$workspaceContext';
+    var conversation = baseConversation;
+    final toolHistory = <String>[];
+    const maxToolCalls = 64;
+    for (var call = 0; call < maxToolCalls; call++) {
       final raw = await chat(
         agentId: agentId,
         localEngineOnly: true,
         system: system,
         user: conversation,
-        temperature: 0.15,
+        temperature: 0.12,
+        maxTokens: 2048,
         requestId: requestId,
       );
       final decoded = _decodeJson(raw);
       final toolCall = decoded['tool_call'];
       if (toolCall == null) {
-        parseAgentOutput(raw);
+        parseAgentOutput(raw, allowEmptyStagedFiles: agentId == 'qa');
         return raw;
-      }
-      if (call == 4) {
-        throw AiGatewayException('تجاوز الوكيل الحد الأقصى لاستدعاءات الأدوات (4).');
       }
       if (toolCall is! Map ||
           toolCall['name'] is! String ||
@@ -352,9 +382,11 @@ class AiGateway {
         toolCall['name'] as String,
         Map<String, dynamic>.from(toolCall['arguments'] as Map),
       );
-      conversation = '$conversation\n\nنتيجة الأداة:\n${jsonEncode(result)}\n\nتابع المهمة، ويمكنك طلب قراءة أخرى أو إرجاع النتيجة النهائية.';
+      toolHistory.add(jsonEncode(result));
+      if (toolHistory.length > 8) toolHistory.removeAt(0);
+      conversation = '$baseConversation\n\nآخر نتائج الأدوات (الأقدم محذوفة لتثبيت حجم السياق):\n${toolHistory.join('\n')}\n\nملفات staging الحالية: ${jsonEncode(toolRuntime.stagedPaths)}\nتابع التنفيذ اعتماداً على النتائج الفعلية، ثم أعد JSON النهائي مع stagedFiles.';
     }
-    throw AiGatewayException('انتهت دورة الأدوات دون نتيجة نهائية.');
+    throw AiGatewayException('تجاوز الوكيل الحد الأقصى لاستدعاءات الأدوات ($maxToolCalls) دون تسليم نهائي.');
   }
 
   Map<String, dynamic> parseManagerResponse(String raw) {
@@ -386,30 +418,52 @@ class AiGateway {
     );
   }
 
-  Map<String, dynamic> parseAgentOutput(String raw) {
+  Map<String, dynamic> parseAgentOutput(String raw, {bool allowEmptyStagedFiles = false}) {
     final decoded = _decodeJson(raw);
     final summary = decoded['summary'];
     if (summary is! String || summary.trim().isEmpty) {
       throw const FormatException('Agent output must contain a non-empty summary.');
     }
     final files = decoded['files'];
-    if (files is! List || files.isEmpty) {
-      throw const FormatException('Agent output must contain at least one file patch.');
+    final stagedFiles = decoded['stagedFiles'];
+    if (files != null && files is! List) {
+      throw const FormatException('files must be a list when provided.');
     }
-    for (final item in files) {
-      if (item is! Map) throw const FormatException('Every file patch must be a JSON object.');
-      final path = item['path'];
-      final content = item['content'];
-      if (path is! String || path.trim().isEmpty) {
-        throw const FormatException('Every file patch must contain a non-empty path.');
-      }
-      if (content is! String) {
-        throw const FormatException('Every file patch must contain text content.');
+    final hasLegacyFiles = files is List && files.isNotEmpty;
+    final validManifest = stagedFiles is List &&
+        stagedFiles.every((item) => item is String && item.trim().isNotEmpty) &&
+        stagedFiles.toSet().length == stagedFiles.length;
+    if (stagedFiles != null && !validManifest) {
+      throw const FormatException('stagedFiles must contain unique non-empty paths.');
+    }
+    if (stagedFiles is List && stagedFiles.isEmpty && !allowEmptyStagedFiles) {
+      throw const FormatException('An empty stagedFiles manifest is permitted only for QA.');
+    }
+    final hasStagedFiles = validManifest &&
+        (stagedFiles.isNotEmpty || allowEmptyStagedFiles);
+    if (!hasLegacyFiles && !hasStagedFiles) {
+      throw const FormatException('Agent output must contain file patches or a valid stagedFiles manifest.');
+    }
+    if (hasLegacyFiles) {
+      for (final item in files) {
+        if (item is! Map) throw const FormatException('Every file patch must be a JSON object.');
+        final path = item['path'];
+        final content = item['content'];
+        if (path is! String || path.trim().isEmpty) {
+          throw const FormatException('Every file patch must contain a non-empty path.');
+        }
+        if (content is! String) {
+          throw const FormatException('Every file patch must contain text content.');
+        }
       }
     }
     final verification = decoded['verification'];
     if (verification is! List || verification.any((item) => item is! String || item.trim().isEmpty)) {
       throw const FormatException('Agent verification must be a list of non-empty strings.');
+    }
+    final risks = decoded['risks'];
+    if (risks != null && (risks is! List || risks.any((item) => item is! String || item.trim().isEmpty))) {
+      throw const FormatException('Agent risks must be a list of non-empty strings when provided.');
     }
     return decoded;
   }

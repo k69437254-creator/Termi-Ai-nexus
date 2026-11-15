@@ -131,6 +131,202 @@ void main() {
   });
 
 
+  test('writes staged file chunks through the agent tool interface', () async {
+    final subject = AgentToolRuntime(
+      ProjectWorkspace(root.path),
+      stagingId: 'agent_task_1',
+    );
+    final first = await subject.execute('write_file_chunk', {
+      'path': 'lib/app.dart',
+      'content': 'class App {\n',
+      'mode': 'create',
+    });
+    final second = await subject.execute('write_file_chunk', {
+      'path': 'lib/app.dart',
+      'content': '}\n',
+      'mode': 'append',
+    });
+    expect(first['ok'], isTrue);
+    expect(second['ok'], isTrue);
+    final staged = await ProjectWorkspace(root.path)
+        .readStagedFiles('agent_task_1', ['lib/app.dart']);
+    expect(staged['lib/app.dart'], 'class App {\n}\n');
+  });
+
+  test('clears validation evidence when files are staged after a test command', () async {
+    final fake = _FakeAgentCommandExecutor();
+    final subject = AgentToolRuntime(
+      ProjectWorkspace(root.path),
+      commandExecutor: fake,
+      stagingId: 'qa_evidence',
+    );
+    final validation = await subject.execute('run_command', {
+      'command': 'flutter',
+      'args': ['test'],
+    });
+    expect(validation['ok'], isTrue);
+    expect(subject.hasSuccessfulValidation, isTrue);
+
+    await subject.execute('write_file_chunk', {
+      'path': 'docs/QA.md',
+      'content': '# QA report',
+      'mode': 'create',
+    });
+    expect(subject.hasSuccessfulValidation, isFalse);
+  });
+
+  test('requires a zero exit code and no timeout for validation evidence', () async {
+    final invalidResponses = <Map<String, dynamic>>[
+      {'ok': true, 'exit_code': 1, 'timed_out': false},
+      {'ok': true, 'exit_code': 0, 'timed_out': true},
+      {'ok': true, 'exit_code': null, 'timed_out': false},
+      {'ok': false, 'exit_code': 0, 'timed_out': false},
+    ];
+
+    for (final response in invalidResponses) {
+      final fake = _FakeAgentCommandExecutor()
+        ..response = {
+          'ok': true,
+          'command': 'flutter',
+          'args': <String>['test'],
+          'exit_code': 0,
+          'timed_out': false,
+          'truncated': false,
+          'output': 'fake output',
+          ...response,
+        };
+      final subject = AgentToolRuntime(
+        ProjectWorkspace(root.path),
+        commandExecutor: fake,
+      );
+      await subject.execute('run_command', {
+        'command': 'flutter',
+        'args': ['test'],
+      });
+      expect(subject.hasSuccessfulValidation, isFalse);
+    }
+  });
+
+  test('does not classify command arguments by substring', () async {
+    final fake = _FakeAgentCommandExecutor();
+    final subject = AgentToolRuntime(
+      ProjectWorkspace(root.path),
+      commandExecutor: fake,
+    );
+    await subject.execute('run_command', {
+      'command': 'flutter',
+      'args': ['--notest'],
+    });
+    expect(subject.hasSuccessfulValidation, isFalse);
+  });
+
+  test('ignores validation words inside build-tool option values', () async {
+    final invalidCases = <Map<String, dynamic>>[
+      {'command': 'gradle', 'args': ['-Ptask=test']},
+      {'command': 'gradle', 'args': ['--project-dir', 'test']},
+      {'command': 'mvn', 'args': ['-Dname=test']},
+      {'command': 'mvn', 'args': ['-f', 'test']},
+      {'command': 'make', 'args': ['--directory', 'test']},
+      {'command': 'gradle', 'args': ['-I', 'test']},
+      {'command': 'mvn', 'args': ['-D', 'test']},
+      {'command': 'make', 'args': ['-C', 'test']},
+    ];
+
+    for (final item in invalidCases) {
+      final subject = AgentToolRuntime(
+        ProjectWorkspace(root.path),
+        commandExecutor: _FakeAgentCommandExecutor(),
+      );
+      await subject.execute('run_command', {
+        'command': item['command'],
+        'args': item['args'],
+      });
+      expect(
+        subject.hasSuccessfulValidation,
+        isFalse,
+        reason: '${item['command']} ${item['args']}',
+      );
+    }
+  });
+
+  test('recognizes explicit build-tool validation goals', () async {
+    final validCases = <Map<String, dynamic>>[
+      {'command': 'gradle', 'args': ['--offline', 'test']},
+      {'command': 'gradle', 'args': ['-i', 'test']},
+      {'command': 'gradle', 'args': ['-I', 'init.gradle', 'test']},
+      {'command': 'mvn', 'args': ['-B', 'clean', 'test']},
+      {'command': 'mvn', 'args': ['-Dname=value', 'test']},
+      {'command': 'make', 'args': ['-C', 'project', 'test']},
+    ];
+
+    for (final item in validCases) {
+      final subject = AgentToolRuntime(
+        ProjectWorkspace(root.path),
+        commandExecutor: _FakeAgentCommandExecutor(),
+      );
+      await subject.execute('run_command', {
+        'command': item['command'],
+        'args': item['args'],
+      });
+      expect(
+        subject.hasSuccessfulValidation,
+        isTrue,
+        reason: '${item['command']} ${item['args']}',
+      );
+    }
+  });
+
+  test('disables staging for read-only QA agents', () async {
+    final subject = AgentToolRuntime(
+      ProjectWorkspace(root.path),
+      commandExecutor: _FakeAgentCommandExecutor(),
+      stagingId: 'qa_read_only',
+      allowFileWrites: false,
+    );
+    final result = await subject.execute('write_file_chunk', {
+      'path': 'docs/QA_REPORT.md',
+      'content': '# QA',
+      'mode': 'create',
+    });
+    expect(result['ok'], isFalse);
+    expect(subject.stagedPaths, isEmpty);
+    expect(subject.lastToolName, 'write_file_chunk');
+  });
+
+  test('records the last invoked tool so QA cannot continue after validation', () async {
+    final fake = _FakeAgentCommandExecutor();
+    final subject = AgentToolRuntime(
+      ProjectWorkspace(root.path),
+      commandExecutor: fake,
+    );
+    await subject.execute('run_command', {
+      'command': 'flutter',
+      'args': ['test'],
+    });
+    expect(subject.hasSuccessfulValidation, isTrue);
+    await subject.execute('list_files', {});
+    expect(subject.lastToolName, 'list_files');
+  });
+
+  test('rejects shell command strings and remote git writes', () async {
+    final fake = _FakeAgentCommandExecutor();
+    final subject = AgentToolRuntime(
+      ProjectWorkspace(root.path),
+      commandExecutor: fake,
+    );
+    final shell = await subject.execute('run_command', {
+      'command': 'bash',
+      'args': ['-c', 'echo unsafe'],
+    });
+    final push = await subject.execute('run_command', {
+      'command': 'git',
+      'args': ['push', 'origin', 'main'],
+    });
+    expect(shell['ok'], isFalse);
+    expect(push['ok'], isFalse);
+    expect(fake.calls, 0);
+  });
+
   test('passes an allowlisted command to the executor', () async {
     final fake = _FakeAgentCommandExecutor();
     final subject = AgentToolRuntime(
@@ -184,6 +380,13 @@ class _FakeAgentCommandExecutor implements AgentCommandExecutor {
   String? lastCommand;
   List<String>? lastArguments;
   String? lastWorkingDirectory;
+  Map<String, dynamic> response = <String, dynamic>{
+    'ok': true,
+    'exit_code': 0,
+    'timed_out': false,
+    'truncated': false,
+    'output': 'fake output',
+  };
 
   @override
   Future<Map<String, dynamic>> run({
@@ -197,6 +400,10 @@ class _FakeAgentCommandExecutor implements AgentCommandExecutor {
     lastCommand = command;
     lastArguments = arguments;
     lastWorkingDirectory = workingDirectory;
-    return {'ok': true, 'output': 'fake output'};
+    return {
+      ...response,
+      'command': command,
+      'args': List<String>.from(arguments),
+    };
   }
 }

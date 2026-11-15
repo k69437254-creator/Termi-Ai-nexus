@@ -13,7 +13,7 @@ class PlatformAgentCommandExecutor implements AgentCommandExecutor {
   const PlatformAgentCommandExecutor();
 
   static const MethodChannel _channel =
-      MethodChannel('termai/agent-command');
+      MethodChannel('termai/linux');
 
   @override
   Future<Map<String, dynamic>> run({
@@ -23,12 +23,13 @@ class PlatformAgentCommandExecutor implements AgentCommandExecutor {
     required String workingDirectory,
   }) async {
     final result = await _channel.invokeMapMethod<String, dynamic>(
-      'run',
+      'runProjectCommand',
       {
         'workspacePath': workspacePath,
         'command': command,
         'args': arguments,
         'workingDirectory': workingDirectory,
+        'timeoutSeconds': 900,
       },
     );
     if (result == null) {

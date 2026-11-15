@@ -16,6 +16,7 @@ import java.net.HttpURLConnection
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.net.URL
+import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -33,6 +34,13 @@ object LinuxRuntimeChannel {
     private const val MIN_FREE_BYTES = 1200L * 1024L * 1024L
     private const val OUTPUT_LIMIT = 96 * 1024
     private val installing = AtomicBoolean(false)
+    private val agentCommands = setOf(
+        "pwd", "ls", "find", "grep", "rg", "cat", "sed", "awk", "wc",
+        "head", "tail", "stat", "git", "gh", "python3", "python", "pip3",
+        "node", "npm", "npx", "java", "javac", "gradle", "mvn", "pytest",
+        "cmake", "make", "gcc", "g++", "cargo", "rustc", "dart", "flutter",
+        "apt-get", "bash", "sh", "tar", "unzip", "zip"
+    )
 
     private data class ProcessResult(val exitCode: Int, val output: String, val timedOut: Boolean)
 
@@ -40,6 +48,36 @@ object LinuxRuntimeChannel {
         val app = context.applicationContext
         MethodChannel(engine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
+                "runProjectCommand" -> {
+                    val workspace = call.argument<String>("workspacePath")
+                    val command = call.argument<String>("command")
+                    val rawArgs = call.argument<List<*>>("args") ?: emptyList<Any>()
+                    val cwd = call.argument<String>("workingDirectory") ?: "."
+                    val timeoutSeconds = call.argument<Int>("timeoutSeconds") ?: 120
+                    if (workspace.isNullOrBlank() || command.isNullOrBlank() ||
+                        rawArgs.any { it !is String }) {
+                        result.error("INVALID_AGENT_COMMAND", "بيانات أمر الوكيل غير صالحة.", null)
+                        return@setMethodCallHandler
+                    }
+                    val args = rawArgs.map { it as String }
+                    val mainHandler = Handler(Looper.getMainLooper())
+                    thread(name = "termai-ubuntu-agent-command", isDaemon = true) {
+                        try {
+                            val output = runProjectCommand(
+                                app, workspace, command, args, cwd, timeoutSeconds
+                            )
+                            mainHandler.post { result.success(output) }
+                        } catch (error: Throwable) {
+                            mainHandler.post {
+                                result.error(
+                                    "UBUNTU_AGENT_COMMAND_FAILED",
+                                    error.message ?: error.javaClass.simpleName,
+                                    null
+                                )
+                            }
+                        }
+                    }
+                }
                 "isInstalled" -> result.success(isInstalled(app))
                 "install" -> {
                     if (!installing.compareAndSet(false, true)) {
@@ -452,6 +490,119 @@ object LinuxRuntimeChannel {
         reader.join(2_000)
         val output = synchronized(bytes) { bytes.toString(Charsets.UTF_8.name()) }
         return ProcessResult(if (finished) process.exitValue() else -1, output, !finished)
+    }
+
+    /** Executes one argv-based command inside the app-private Ubuntu guest. */
+    private fun runProjectCommand(
+        context: Context,
+        workspacePath: String,
+        command: String,
+        args: List<String>,
+        workingDirectory: String,
+        timeoutSeconds: Int
+    ): Map<String, Any> {
+        check(!installing.get()) { "تثبيت Ubuntu جارٍ؛ انتظر انتهاء التثبيت قبل تنفيذ أمر وكيل." }
+        check(isInstalled(context)) { "Ubuntu/PRoot غير مثبت أو لم يجتز الفحص. لا يوجد تنفيذ أوامر على Android host كبديل." }
+        require(command in agentCommands) { "الأمر غير موجود في قائمة Ubuntu المسموحة: $command" }
+        require(args.size <= 64 && args.sumOf { it.length } <= 32768 &&
+            args.none { it.contains('\u0000') }) { "وسائط الأمر تتجاوز الحدود الآمنة." }
+        require(timeoutSeconds in 1..900) { "مهلة الأمر يجب أن تكون بين ثانية و900 ثانية." }
+
+        val dataRoot = File(context.applicationInfo.dataDir).canonicalFile
+        val workspace = File(workspacePath).canonicalFile
+        require(workspace.isDirectory &&
+            workspace.parentFile?.name == "workspaces" &&
+            workspace.parentFile?.parentFile?.name == "TermiAI-Nexus" &&
+            workspace.path.startsWith(dataRoot.path + File.separator)) {
+            "مساحة العمل خارج مجلد مشاريع TermiAI-Nexus الخاص بالتطبيق."
+        }
+
+        fun resolveWorkspacePath(raw: String, allowDot: Boolean): File {
+            if (allowDot && raw == ".") return workspace
+            val normalized = raw.replace('\\', '/')
+            require(normalized.isNotBlank() && normalized.length <= 512 &&
+                !normalized.startsWith("/") && !normalized.startsWith("~") && !normalized.contains(':')) {
+                "مسار مساحة العمل غير صالح."
+            }
+            val parts = normalized.split('/')
+            require(parts.all { it.isNotEmpty() && it != "." && it != ".." && !it.startsWith("-") && it != ".termai" && it != ".git" }) {
+                "المسار يحتوي على عنصر محظور أو غير آمن."
+            }
+            var cursor = workspace
+            for (part in parts) {
+                cursor = File(cursor, part)
+                require(!Files.isSymbolicLink(cursor.toPath())) { "Ubuntu agent command refuses workspace symlinks." }
+            }
+            val resolved = cursor.canonicalFile
+            require(resolved.path == workspace.path || resolved.path.startsWith(workspace.path + File.separator)) {
+                "المسار خرج من مساحة العمل."
+            }
+            return resolved
+        }
+
+        val cwd = resolveWorkspacePath(workingDirectory, allowDot = true)
+        require(cwd.isDirectory) { "مجلد العمل غير موجود: $workingDirectory" }
+        if (command == "git") {
+            val verb = args.firstOrNull().orEmpty()
+            require(verb in setOf("status", "diff", "log", "show", "rev-parse", "ls-files", "check-ignore")) {
+                "يسمح الوكيل بعمليات Git للقراءة فقط؛ العمليات الكتابية أو البعيدة تتطلب موافقة صريحة."
+            }
+            require(args.none { arg ->
+                arg == "-c" || arg.startsWith("-c") ||
+                arg in setOf(
+                    "--output", "--ext-diff", "--textconv", "--pager",
+                    "--exec-path", "--git-dir", "--work-tree", "--config-env"
+                ) ||
+                arg.startsWith("--output=") ||
+                arg.startsWith("--git-dir=") ||
+                arg.startsWith("--work-tree=") ||
+                arg.startsWith("--config-env=")
+            }) { "وسيط Git قد يغير الإعدادات أو يكتب ملفات؛ تم رفضه." }
+        }
+        if (command == "gh") {
+            val verb = args.firstOrNull().orEmpty()
+            require(verb in setOf("repo", "pr", "issue", "run", "auth")) {
+                "أمر GitHub الكتابي غير مسموح في التنفيذ التلقائي."
+            }
+            require(args.getOrNull(1) in setOf("list", "view", "status", "refresh")) {
+                "يسمح وكيل المشروع بعمليات GitHub الاستعلامية فقط."
+            }
+        }
+        if (command == "apt-get") {
+            require(args.firstOrNull() in setOf("update", "install", "download", "show", "list")) {
+                "يسمح داخل Ubuntu بتحديث الفهارس وتثبيت/فحص الحزم فقط."
+            }
+        }
+        val actualArgs = args.toMutableList()
+        if (command == "bash" || command == "sh") {
+            require(actualArgs.isNotEmpty() && !actualArgs.first().startsWith("-")) {
+                "لا يسمح بتمرير shell code عبر -c/-lc؛ شغّل ملفاً داخل مساحة العمل مباشرة."
+            }
+            val script = resolveWorkspacePath(actualArgs.first(), allowDot = false)
+            require(script.isFile) { "ملف script غير موجود: ${actualArgs.first()}" }
+            val relative = workspace.toPath().relativize(script.toPath()).toString().replace(File.separatorChar, '/')
+            actualArgs[0] = "/workspace/$relative"
+        }
+
+        val guestCwd = if (cwd == workspace) "/workspace" else
+            "/workspace/" + workspace.toPath().relativize(cwd.toPath()).toString().replace(File.separatorChar, '/')
+        val result = runProot(
+            context = context,
+            root = rootfs(context),
+            extraBinds = listOf("${workspace.absolutePath}:/workspace"),
+            workingDirectory = guestCwd,
+            command = listOf(command) + actualArgs,
+            timeoutMs = timeoutSeconds.toLong() * 1000L
+        )
+        return mapOf(
+            "ok" to (!result.timedOut && result.exitCode == 0),
+            "command" to command,
+            "args" to args,
+            "exit_code" to result.exitCode,
+            "timed_out" to result.timedOut,
+            "truncated" to (result.output.length >= OUTPUT_LIMIT),
+            "output" to result.output
+        )
     }
 
     private fun requireSuccess(label: String, result: ProcessResult) {

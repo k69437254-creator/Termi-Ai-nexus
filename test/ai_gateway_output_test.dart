@@ -67,6 +67,36 @@ void main() {
     expect(tasks.last.risk, 'low');
   });
 
+  test('accepts staged-file agent output without embedding file contents', () {
+    final output = gateway.parseAgentOutput(
+      '{"summary":"Implemented files","stagedFiles":["lib/main.dart","test/widget_test.dart"],"verification":["Files staged"]}',
+    );
+    expect(output['stagedFiles'], hasLength(2));
+  });
+
+  test('accepts an empty staged manifest only in QA parser mode', () {
+    const raw = '{"summary":"QA completed","stagedFiles":[],"verification":[],"risks":[]}';
+    expect(() => gateway.parseAgentOutput(raw), throwsFormatException);
+    final output = gateway.parseAgentOutput(
+      raw,
+      allowEmptyStagedFiles: true,
+    );
+    expect(output['stagedFiles'], isEmpty);
+  });
+
+  test('rejects plans that omit the final QA gate', () {
+    expect(
+      () => gateway.parseProjectPlanResponse('''
+{"tasks":[
+ {"id":"a","title":"Architecture","description":"Design","agentId":"architect","risk":"low"},
+ {"id":"b","title":"Build","description":"Implement","agentId":"developer","risk":"medium"},
+ {"id":"c","title":"Docs","description":"Document","agentId":"security","risk":"low"}
+]}
+'''),
+      throwsFormatException,
+    );
+  });
+
   test('rejects project plans with invalid count, duplicate IDs or invalid agents', () {
     expect(
       () => gateway.parseProjectPlanResponse(

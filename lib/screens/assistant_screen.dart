@@ -204,6 +204,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
       final raw = await widget.coordinator.gateway.chat(
         agentId: 'manager',
         temperature: 0.2,
+        localEngineOnly: true,
         system: 'You are the main conversational director of TermiAI-Nexus. '
             'Classify the latest user message using the conversation context. '
             'Return one JSON object only. For normal conversation use '
@@ -302,7 +303,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
             isUser: false,
             text: failed
                 ? 'انتهى مسار التنفيذ مع مهمة لم تكتمل. راجع سجل المحاولات ونتيجة المهمة داخل الخطة؛ لم أعتبر وجود الملفات دليلاً على نجاح بناء التطبيق.'
-                : 'اكتمل مسار المهام. راجع النتائج والملفات في مساحة المشروع، وتذكّر أن بناء التطبيق وتشغيله يحتاجان تحققاً منفصلاً.',
+                : 'اكتمل مسار المهام واجتاز وكيل الجودة أمر تحقق فعلياً داخل Ubuntu/PRoot. راجع سجل QA؛ نجاح الأمر لا يعني وحده أن التطبيق ثُبّت واختُبر على الجهاز.',
             isError: failed,
           ));
         });

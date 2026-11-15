@@ -73,6 +73,7 @@ class ProjectExecutionService : Service() {
             flutterEngine = engine
 
             AramEngineChannel.register(engine, applicationContext, null)
+            LinuxRuntimeChannel.register(engine, applicationContext)
             AgentCommandChannel.register(engine, applicationContext)
 
             val channel = MethodChannel(

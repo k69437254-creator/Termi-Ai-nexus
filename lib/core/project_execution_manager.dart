@@ -11,7 +11,8 @@ import 'project_coordinator.dart';
 /// Android owns execution. This manager only submits jobs and mirrors
 /// their persisted task states into the current UI isolate.
 class ProjectExecutionManager {
-  ProjectExecutionManager({required this._coordinator});
+  ProjectExecutionManager({required ProjectCoordinator coordinator})
+      : _coordinator = coordinator;
 
   static const MethodChannel _engineChannel =
       MethodChannel('termai/aram-engine');
@@ -232,9 +233,16 @@ class ProjectExecutionManager {
     _QueuedProject job,
   ) async {
     final serviceStartTime = DateTime.now();
+    final hardDeadline = serviceStartTime.add(const Duration(hours: 3));
     var serviceWasActive = false;
 
     while (true) {
+      if (DateTime.now().isAfter(hardDeadline)) {
+        await _requestAndroidCancellation(job.project.id);
+        throw TimeoutException(
+          'تجاوز المشروع الحد الأقصى للتنفيذ (3 ساعات) وتم إرسال طلب إيقاف.',
+        );
+      }
       await Future<void>.delayed(const Duration(milliseconds: 800));
 
       final projects = await _coordinator.listProjects();

@@ -97,8 +97,15 @@ class ProjectCoordinator {
           final checkpoint = await workspace.checkpoint('${task.id}_attempt_$attempt');
           var attemptedPatches = <String, String>{};
           var appliedPatches = <String, String>{};
+          final stagingId = '${task.id}_attempt_$attempt';
+          final toolRuntime = AgentToolRuntime(
+            workspace,
+            commandExecutor: const PlatformAgentCommandExecutor(),
+            stagingId: stagingId,
+            allowFileWrites: task.agentId != 'qa',
+          );
           try {
-            final workspaceContext = await workspace.readContextSnapshot();
+            final workspaceContext = await workspace.readContextSnapshot(maxFiles: 20, maxCharacters: 24000);
             if (executionControl.cancelRequested) {
               throw const _ProjectExecutionCancelled();
             }
@@ -112,7 +119,7 @@ class ProjectCoordinator {
               workspaceContext: workspaceContext,
               memory: memory,
               requestId: requestId,
-              toolRuntime: AgentToolRuntime(workspace, commandExecutor: const PlatformAgentCommandExecutor()),
+              toolRuntime: toolRuntime,
             );
             if (executionControl.requestId == requestId) {
               executionControl.requestId = null;
@@ -120,9 +127,112 @@ class ProjectCoordinator {
             if (executionControl.cancelRequested) {
               throw const _ProjectExecutionCancelled();
             }
-            final output = gateway.parseAgentOutput(raw);
-            final files = output['files'] as List;
-            attemptedPatches = workspace.validatePatches(files);
+            final isQa = task.agentId == 'qa';
+          final output = gateway.parseAgentOutput(
+            raw,
+            allowEmptyStagedFiles: isQa,
+          );
+
+          final List<dynamic> filePatches;
+          if (isQa) {
+            final manifest = output['stagedFiles'];
+            final legacyFiles = output['files'];
+            final qaEvidence = toolRuntime.successfulValidationEvidence;
+
+            if (manifest is! List || manifest.isNotEmpty) {
+              throw StateError('QA must return an explicitly empty stagedFiles list.');
+            }
+            if (legacyFiles is List && legacyFiles.isNotEmpty) {
+              throw StateError('QA is not permitted to return legacy file patches.');
+            }
+            if (toolRuntime.stagedPaths.isNotEmpty) {
+              throw StateError('QA attempted to stage files despite its read-only policy.');
+            }
+            if (toolRuntime.lastToolName != 'run_command') {
+              throw StateError('QA must finish with an actual run_command tool call.');
+            }
+            if (qaEvidence.isEmpty) {
+              throw StateError(
+                'QA rejected: no executed validation command has a confirmed zero exit code and no timeout.',
+              );
+            }
+
+            final report = StringBuffer()
+              ..writeln('# QA Report')
+              ..writeln()
+              ..writeln('## Task')
+              ..writeln(task.title)
+              ..writeln()
+              ..writeln('## Agent summary')
+              ..writeln(output['summary'])
+              ..writeln()
+              ..writeln('## Executed validation evidence')
+              ..writeln();
+
+            for (var i = 0; i < qaEvidence.length; i++) {
+              final item = qaEvidence[i];
+              final command = item['command'];
+              final args = (item['args'] as List).cast<String>();
+              report
+                ..writeln('### Validation ${i + 1}')
+                ..writeln('- Command: `$command`')
+                ..writeln('- Arguments: `${args.join(' ')}`')
+                ..writeln('- Exit code: `${item['exit_code']}`')
+                ..writeln('- Timed out: `${item['timed_out']}`')
+                ..writeln('- Output truncated: `${item['truncated']}`');
+              final commandOutput = item['output'] as String? ?? '';
+              if (commandOutput.isNotEmpty) {
+                report
+                  ..writeln()
+                  ..writeln('```text')
+                  ..writeln(commandOutput)
+                  ..writeln('```');
+              }
+              report.writeln();
+            }
+
+            final verificationNotes =
+                (output['verification'] as List).cast<String>();
+            report
+              ..writeln('## QA notes')
+              ..writeln(
+                verificationNotes.isEmpty
+                    ? 'No additional notes were supplied.'
+                    : verificationNotes.map((item) => '- $item').join('\n'),
+              )
+              ..writeln()
+              ..writeln('## Risks')
+              ..writeln();
+
+            final risks = output['risks'];
+            if (risks is List && risks.isNotEmpty) {
+              report.writeln(risks.map((item) => '- $item').join('\n'));
+            } else {
+              report.writeln('No additional risks were reported by the QA agent.');
+            }
+
+            filePatches = <dynamic>[
+              {
+                'path': 'docs/QA_REPORT.md',
+                'content': report.toString(),
+              },
+            ];
+          } else {
+            final stagedManifest = output['stagedFiles'];
+            if (stagedManifest is List) {
+              final staged = await workspace.readStagedFiles(
+                stagingId,
+                stagedManifest.cast<String>(),
+              );
+              filePatches = [
+                for (final entry in staged.entries)
+                  {'path': entry.key, 'content': entry.value},
+              ];
+            } else {
+              filePatches = output['files'] as List;
+            }
+          }
+          attemptedPatches = workspace.validatePatches(filePatches);
             final changedPaths = await workspace.applyPatches(attemptedPatches, checkpoint: checkpoint);
             appliedPatches = <String, String>{
               for (final path in changedPaths) path: attemptedPatches[path]!,
@@ -139,22 +249,32 @@ class ProjectCoordinator {
             final summary = output['summary'] as String;
             final proposedChecks = (output['verification'] as List).cast<String>();
             final checksText = proposedChecks.isEmpty
-                ? 'لم يقدم الوكيل فحوصات مقترحة.'
+                ? 'لم يقدم الوكيل ملاحظات تحقق.'
                 : proposedChecks.map((item) => '- $item').join('\n');
             final changedFilesText = changedPaths.map((path) => '- `$path`').join('\n');
-            final evidence = '## Execution evidence\n\n'
-                '- Changed files: ${changedPaths.length}\n'
-                '- Full file-content comparison: PASS\n'
-                '- Device build and test commands: NOT RUN\n\n'
-                '## Agent-proposed checks (not executed)\n$checksText';
-            await workspace.writeAgentNote(task.id, '# ${task.title}\n\n$summary\n\n$evidence');
+            final commandEvidence = toolRuntime.successfulValidationEvidence;
+          final commandEvidenceLines = commandEvidence.map((item) {
+            final args = (item['args'] as List).cast<String>();
+            return '- `${item['command']} ${args.join(' ')}`: exit=${item['exit_code']}, timed_out=${item['timed_out']}, truncated=${item['truncated']}';
+          }).toList(growable: false);
+          final evidence = '## Execution evidence\n\n'
+              '- Changed files: ${changedPaths.length}\n'
+              '- Full file-content comparison: PASS\n'
+              '- Successful executed validation commands: ${commandEvidence.length}\n'
+              '${commandEvidenceLines.join('\n')}\n\n'
+              '## Agent notes\n$checksText';
+          await workspace.writeAgentNote(task.id, '# ${task.title}\n\n$summary\n\n$evidence');
+            await workspace.discardStagedFiles(stagingId);
             if (executionControl.cancelRequested) {
               throw const _ProjectExecutionCancelled();
             }
+            final validationText = commandEvidenceLines.isEmpty
+                ? 'لم تُشغّل أوامر تحقق في هذه المهمة؛ بوابة QA النهائية هي التي تحدد صلاحية التسليم.'
+                : 'أوامر تحقق ناجحة نُفذت فعلياً داخل Ubuntu/PRoot:\n${commandEvidenceLines.join('\n')}';
             task.result = '$summary\n\n'
                 'دليل التنفيذ: تم تعديل ${changedPaths.length} ملف/ملفات والتحقق من تطابق محتوى كل ملف بالكامل.\n'
                 'الملفات المعدلة:\n$changedFilesText\n'
-                'لم تُشغّل اختبارات بناء أو تشغيل على الجهاز.';
+                '$validationText';
             task.status = TaskStatus.completed;
             success = true;
             await save(project);
@@ -169,6 +289,11 @@ class ProjectCoordinator {
               task.result = '$summary\n\nتعذر تحديث سجل الذاكرة: $memoryError';
             }
           } catch (error) {
+            try {
+              await workspace.discardStagedFiles(stagingId);
+            } catch (_) {
+              // Preserve the original failure; staging cleanup is best effort.
+            }
             executionControl.requestId = null;
             final wasCancelled = error is _ProjectExecutionCancelled || executionControl.cancelRequested;
             task.status = TaskStatus.running;

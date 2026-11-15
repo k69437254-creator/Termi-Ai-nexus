@@ -62,6 +62,57 @@ void main() {
     expect(await workspace.verifyFiles({'lib/example.dart': 'different expected content'}), isFalse);
   });
 
+  test('rolls back earlier writes when a later patch in the same batch fails', () async {
+    final blocker = File('${temporaryRoot.path}/blocker');
+    await blocker.writeAsString('not a directory');
+    final created = File('${temporaryRoot.path}/created-before-failure.txt');
+    final checkpoint = await workspace.checkpoint('partial_batch_failure');
+
+    await expectLater(
+      workspace.applyPatches(
+        {
+          'created-before-failure.txt': 'must be rolled back',
+          'blocker/child.txt': 'this write must fail',
+        },
+        checkpoint: checkpoint,
+      ),
+      throwsFormatException,
+    );
+
+    expect(await created.exists(), isFalse);
+    expect(await blocker.readAsString(), 'not a directory');
+  });
+
+  test('stages file chunks and reads the completed staged manifest', () async {
+    await workspace.stageFileChunk(
+      'task_attempt_1', 'lib/main.dart', 'void main() {\n', append: false,
+    );
+    await workspace.stageFileChunk(
+      'task_attempt_1', 'lib/main.dart', '  print(1);\n}\n', append: true,
+    );
+    final files = await workspace.readStagedFiles(
+      'task_attempt_1', ['lib/main.dart'],
+    );
+    expect(files['lib/main.dart'], 'void main() {\n  print(1);\n}\n');
+    await workspace.discardStagedFiles('task_attempt_1');
+    await expectLater(
+      workspace.readStagedFiles('task_attempt_1', ['lib/main.dart']),
+      throwsFormatException,
+    );
+  });
+
+  test('rejects staged path traversal and duplicate create writes', () async {
+    await expectLater(
+      workspace.stageFileChunk('task', '../outside.dart', 'x', append: false),
+      throwsFormatException,
+    );
+    await workspace.stageFileChunk('task', 'lib/a.dart', 'one', append: false);
+    await expectLater(
+      workspace.stageFileChunk('task', 'lib/a.dart', 'two', append: false),
+      throwsFormatException,
+    );
+  });
+
   test('rejects writes when a file changed after the task checkpoint', () async {
     final file = File('${temporaryRoot.path}/README.md');
     await file.writeAsString('checkpoint version');

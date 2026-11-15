@@ -333,7 +333,7 @@ object ModelRuntime {
     private const val DEFAULT_NATIVE_SYSTEM_PROMPT = "أنت مساعد Aram AI. أجب بدقة ووضوح."
     private const val MAX_PENDING_REQUESTS = 12
     private const val OWNER_PRIORITY = 0
-    private const val MAX_SAFE_OUTPUT_TOKENS = 512
+    private const val MAX_SAFE_OUTPUT_TOKENS = 2048
 
     suspend fun benchmark(): String = generationLock.withLock {
         val instance = engine ?: error("لم يتم إنشاء محرك الاستدلال بعد")

@@ -86,59 +86,261 @@ class ProjectWorkspace {
     await initialize();
     if (patches.isEmpty) throw const FormatException('Empty patch sets cannot be applied.');
     final changed = <String>[];
+    final originals = <String, String?>{};
     var index = 0;
-    for (final entry in patches.entries) {
-      if (!ApprovalPolicy.validRelativePath(entry.key)) {
-        throw FormatException('Rejected unsafe file path: ${entry.key}');
-      }
-      final segments = entry.key.split('/');
-      var cursor = rootPath;
-      for (var segmentIndex = 0; segmentIndex < segments.length; segmentIndex++) {
-        cursor = p.join(cursor, segments[segmentIndex]);
-        final type = await FileSystemEntity.type(cursor, followLinks: false);
-        if (type == FileSystemEntityType.link) {
-          throw FormatException('Symlink paths are not writable by the agent: ${entry.key}');
+    try {
+      for (final entry in patches.entries) {
+        if (!ApprovalPolicy.validRelativePath(entry.key)) {
+          throw FormatException('Rejected unsafe file path: ${entry.key}');
         }
-        if (segmentIndex < segments.length - 1 && type != FileSystemEntityType.notFound && type != FileSystemEntityType.directory) {
-          throw FormatException('A parent path is not a directory: $cursor');
+        final segments = entry.key.split('/');
+        var cursor = rootPath;
+        for (var segmentIndex = 0; segmentIndex < segments.length; segmentIndex++) {
+          cursor = p.join(cursor, segments[segmentIndex]);
+          final type = await FileSystemEntity.type(cursor, followLinks: false);
+          if (type == FileSystemEntityType.link) {
+            throw FormatException('Symlink paths are not writable by the agent: ${entry.key}');
+          }
+          if (segmentIndex < segments.length - 1 &&
+              type != FileSystemEntityType.notFound &&
+              type != FileSystemEntityType.directory) {
+            throw FormatException('A parent path is not a directory: $cursor');
+          }
+          if (segmentIndex == segments.length - 1 && type == FileSystemEntityType.directory) {
+            throw FormatException('A directory cannot be replaced with a file: $cursor');
+          }
         }
-        if (segmentIndex == segments.length - 1 && type == FileSystemEntityType.directory) {
-          throw FormatException('A directory cannot be replaced with a file: $cursor');
-        }
-      }
 
-      final file = File(cursor);
-      final currentType = await FileSystemEntity.type(file.path, followLinks: false);
-      if (checkpoint != null && !await _matchesCheckpoint(file, checkpoint, entry.key)) {
-        throw StateError('Workspace conflict: ${entry.key} changed after the task checkpoint.');
-      }
-      if (currentType == FileSystemEntityType.file && await file.readAsString() == entry.value) {
+        final file = File(cursor);
+        final currentType = await FileSystemEntity.type(file.path, followLinks: false);
+        if (checkpoint != null && !await _matchesCheckpoint(file, checkpoint, entry.key)) {
+          throw StateError('Workspace conflict: ${entry.key} changed after the task checkpoint.');
+        }
+        if (currentType == FileSystemEntityType.file && await file.readAsString() == entry.value) {
+          index++;
+          continue;
+        }
+        if (currentType != FileSystemEntityType.file && currentType != FileSystemEntityType.notFound) {
+          throw FormatException('Target is not a regular file: ${entry.key}');
+        }
+
+        originals[entry.key] = currentType == FileSystemEntityType.file
+            ? await file.readAsString()
+            : null;
+        await file.parent.create(recursive: true);
+        final temporary = File(p.join(
+          file.parent.path,
+          '.${p.basename(file.path)}.termai-${DateTime.now().microsecondsSinceEpoch}-$index.tmp',
+        ));
+        try {
+          await temporary.writeAsString(entry.value, flush: true);
+          await temporary.rename(file.path);
+          changed.add(entry.key);
+        } catch (_) {
+          if (await temporary.exists()) await temporary.delete();
+          rethrow;
+        }
         index++;
-        continue;
       }
-      if (currentType != FileSystemEntityType.file && currentType != FileSystemEntityType.notFound) {
-        throw FormatException('Target is not a regular file: ${entry.key}');
+      if (changed.isEmpty) {
+        throw StateError('No file contents changed; an empty or no-op patch cannot complete a task.');
       }
-
-      await file.parent.create(recursive: true);
-      final temporary = File(p.join(
-        file.parent.path,
-        '.${p.basename(file.path)}.termai-${DateTime.now().microsecondsSinceEpoch}-$index.tmp',
-      ));
+      return changed;
+    } catch (error, stackTrace) {
+      final changedContents = <String, String>{
+        for (final path in changed) path: patches[path]!,
+      };
+      List<String> rollbackFailures;
       try {
-        await temporary.writeAsString(entry.value, flush: true);
-        await temporary.rename(file.path);
-        changed.add(entry.key);
-      } catch (_) {
-        if (await temporary.exists()) await temporary.delete();
-        rethrow;
+        if (checkpoint != null) {
+          final report = await rollbackPatches(checkpoint, changedContents);
+          rollbackFailures = [...report.failedPaths, ...report.preservedPaths];
+        } else {
+          rollbackFailures = await _rollbackAppliedWithoutCheckpoint(originals, changedContents);
+        }
+      } catch (rollbackError) {
+        rollbackFailures = ['rollback threw: $rollbackError'];
       }
-      index++;
+      if (rollbackFailures.isNotEmpty) {
+        throw WorkspaceApplyException(
+          message: 'Patch application failed ($error) and rollback was incomplete: ${rollbackFailures.join(', ')}',
+          rollbackFailedPaths: rollbackFailures,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
     }
-    if (changed.isEmpty) {
-      throw StateError('No file contents changed; an empty or no-op patch cannot complete a task.');
+  }
+
+  Future<List<String>> _rollbackAppliedWithoutCheckpoint(
+    Map<String, String?> originals,
+    Map<String, String> written,
+  ) async {
+    final failures = <String>[];
+    for (final entry in written.entries.toList().reversed) {
+      try {
+        final current = File(p.join(rootPath, entry.key));
+        if (await FileSystemEntity.type(current.path, followLinks: false) != FileSystemEntityType.file ||
+            await current.readAsString() != entry.value) {
+          failures.add(entry.key);
+          continue;
+        }
+        final original = originals[entry.key];
+        if (original == null) {
+          await current.delete();
+        } else {
+          final temporary = File('${current.path}.termai-rollback-${DateTime.now().microsecondsSinceEpoch}.tmp');
+          await temporary.writeAsString(original, flush: true);
+          await temporary.rename(current.path);
+        }
+      } catch (_) {
+        failures.add(entry.key);
+      }
     }
-    return changed;
+    return failures;
+  }
+
+  String _safeStagingId(String raw) {
+    final safe = raw.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+    if (safe.isEmpty || safe.length > 96) {
+      throw FormatException('Invalid staging identifier.');
+    }
+    return safe;
+  }
+
+  Future<Directory> _stagingDirectory(String stagingId) async {
+    await initialize();
+    final safeId = _safeStagingId(stagingId);
+    final termai = Directory(p.join(rootPath, '.termai'));
+    final staging = Directory(p.join(termai.path, 'staging'));
+    for (final directory in [termai, staging]) {
+      final type = await FileSystemEntity.type(directory.path, followLinks: false);
+      if (type == FileSystemEntityType.link ||
+          (type != FileSystemEntityType.notFound && type != FileSystemEntityType.directory)) {
+        throw FormatException('Unsafe staging directory: ${directory.path}');
+      }
+    }
+    final target = Directory(p.join(staging.path, safeId));
+    final type = await FileSystemEntity.type(target.path, followLinks: false);
+    if (type == FileSystemEntityType.link ||
+        (type != FileSystemEntityType.notFound && type != FileSystemEntityType.directory)) {
+      throw FormatException('Unsafe staging target: ${target.path}');
+    }
+    await target.create(recursive: true);
+    return target;
+  }
+
+  Future<Map<String, int>> stageFileChunk(
+    String stagingId,
+    String relativePath,
+    String content, {
+    required bool append,
+  }) async {
+    if (!ApprovalPolicy.validRelativePath(relativePath)) {
+      throw FormatException('Rejected unsafe staged file path: $relativePath');
+    }
+    if (content.isEmpty || utf8.encode(content).length > 64 * 1024) {
+      throw FormatException('Each staged chunk must contain 1 to 65536 UTF-8 bytes.');
+    }
+    final stageRoot = await _stagingDirectory(stagingId);
+    final normalized = p.normalize(relativePath.replaceAll('\\', '/'));
+    final file = File(p.join(stageRoot.path, normalized));
+    if (!p.isWithin(stageRoot.path, file.path)) {
+      throw FormatException('Staged file escaped its task directory.');
+    }
+    var cursor = stageRoot.path;
+    final parts = normalized.split('/');
+    for (var index = 0; index < parts.length; index++) {
+      cursor = p.join(cursor, parts[index]);
+      final type = await FileSystemEntity.type(cursor, followLinks: false);
+      if (type == FileSystemEntityType.link) {
+        throw FormatException('Staging refuses symbolic links: $relativePath');
+      }
+      if (index < parts.length - 1 &&
+          type != FileSystemEntityType.notFound &&
+          type != FileSystemEntityType.directory) {
+        throw FormatException('A staged parent is not a directory: $cursor');
+      }
+    }
+    final type = await FileSystemEntity.type(file.path, followLinks: false);
+    if (append && type != FileSystemEntityType.file) {
+      throw FormatException('Cannot append before creating staged file: $relativePath');
+    }
+    if (!append && type != FileSystemEntityType.notFound) {
+      throw FormatException('Staged file already exists; use append mode: $relativePath');
+    }
+    await file.parent.create(recursive: true);
+    final currentSize = type == FileSystemEntityType.file ? await file.length() : 0;
+    if (currentSize + utf8.encode(content).length > 2 * 1024 * 1024) {
+      throw FormatException('Staged file exceeds the 2 MB limit: $relativePath');
+    }
+    var existingFiles = 0;
+    await for (final entity in stageRoot.list(recursive: true, followLinks: false)) {
+      if (await FileSystemEntity.type(entity.path, followLinks: false) == FileSystemEntityType.file) {
+        existingFiles++;
+      }
+    }
+    if (!append && existingFiles >= 60) {
+      throw FormatException('A task may stage at most 60 files.');
+    }
+    var totalBytes = 0;
+    await for (final entity in stageRoot.list(recursive: true, followLinks: false)) {
+      if (entity is File && await FileSystemEntity.type(entity.path, followLinks: false) == FileSystemEntityType.file) {
+        totalBytes += await entity.length();
+      }
+    }
+    if (totalBytes + utf8.encode(content).length > 8 * 1024 * 1024) {
+      throw FormatException('A task may stage at most 8 MB of text.');
+    }
+    await file.writeAsString(content, mode: append ? FileMode.append : FileMode.write, flush: true);
+    return {'chunkBytes': utf8.encode(content).length, 'fileBytes': await file.length()};
+  }
+
+  Future<Map<String, String>> readStagedFiles(
+    String stagingId,
+    List<String> relativePaths,
+  ) async {
+    if (relativePaths.isEmpty || relativePaths.length > 60 ||
+        relativePaths.toSet().length != relativePaths.length) {
+      throw FormatException('Staged file manifest must contain 1 to 60 unique paths.');
+    }
+    final stageRoot = await _stagingDirectory(stagingId);
+    final result = <String, String>{};
+    var totalBytes = 0;
+    for (final path in relativePaths) {
+      if (!ApprovalPolicy.validRelativePath(path)) {
+        throw FormatException('Rejected staged file path: $path');
+      }
+      final normalized = p.normalize(path.replaceAll('\\', '/'));
+      final file = File(p.join(stageRoot.path, normalized));
+      if (!p.isWithin(stageRoot.path, file.path)) {
+        throw FormatException('Staged path escaped task directory: $path');
+      }
+      var cursor = stageRoot.path;
+      for (final segment in normalized.split('/')) {
+        cursor = p.join(cursor, segment);
+        if (await FileSystemEntity.type(cursor, followLinks: false) == FileSystemEntityType.link) {
+          throw FormatException('Staged manifest contains a symbolic link: $path');
+        }
+      }
+      if (await FileSystemEntity.type(file.path, followLinks: false) != FileSystemEntityType.file) {
+        throw FormatException('Staged file is missing or not regular: $path');
+      }
+      final bytes = await file.readAsBytes();
+      totalBytes += bytes.length;
+      if (bytes.length > 2 * 1024 * 1024 || totalBytes > 8 * 1024 * 1024 || bytes.contains(0)) {
+        throw FormatException('Staged file is oversized or binary: $path');
+      }
+      result[normalized] = utf8.decode(bytes);
+    }
+    return result;
+  }
+
+  Future<void> discardStagedFiles(String stagingId) async {
+    final safeId = _safeStagingId(stagingId);
+    final target = Directory(p.join(rootPath, '.termai', 'staging', safeId));
+    if (await FileSystemEntity.type(target.path, followLinks: false) == FileSystemEntityType.directory) {
+      await target.delete(recursive: true);
+    }
   }
 
   Future<bool> _matchesCheckpoint(File current, WorkspaceCheckpoint checkpoint, String relativePath) async {
