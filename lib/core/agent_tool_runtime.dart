@@ -1,3 +1,6 @@
+// TERMAI_GITHUB_AUTOMATION_UPDATE_20261116_V1
+import 'dart:io';
+
 import 'agent_command_executor.dart';
 import 'project_workspace.dart';
 
@@ -82,7 +85,75 @@ class AgentToolRuntime {
       }
     }
 
-    if (toolName == 'write_file_chunk') {
+    if (toolName == 'write_file_chunk') {    if (toolName == 'inspect_project') {
+      try {
+        final root = Directory(workspace.rootPath);
+        if (!await root.exists()) throw StateError('Workspace directory does not exist.');
+        const ignored = {'.git', '.termai', '.dart_tool', '.gradle', 'build', 'node_modules', '.idea'};
+        const sensitiveNames = {'.env', '.npmrc', '.netrc', '.git-credentials', 'google-services.json'};
+        const sensitiveExtensions = {'.pem', '.p12', '.pfx', '.jks', '.keystore', '.key'};
+        final problems = <String>[];
+        var visited = 0;
+        await for (final entity in root.list(recursive: true, followLinks: false)) {
+          final relative = entity.path.substring(root.path.length).replaceAll('\\', '/').replaceFirst(RegExp(r'^/'), '');
+          final parts = relative.split('/');
+          if (parts.any(ignored.contains)) continue;
+          if (await FileSystemEntity.type(entity.path, followLinks: false) == FileSystemEntityType.link) {
+            problems.add('Symlink found: $relative');
+            continue;
+          }
+          if (entity is File) {
+            visited++;
+            final name = parts.last.toLowerCase();
+            final extension = name.contains('.') ? name.substring(name.lastIndexOf('.')) : '';
+            if (sensitiveNames.contains(name) || sensitiveExtensions.contains(extension) || (name.startsWith('.env.') && !const {'.env.example', '.env.sample', '.env.template'}.contains(name))) {
+              problems.add('Sensitive file must not be published: $relative');
+            }
+            if (visited > 2500) {
+              problems.add('Workspace exceeds the 2500-file inspection limit.');
+              break;
+            }
+          }
+        }
+        final flutter = await File('${root.path}/pubspec.yaml').exists();
+        final androidSettings = await File('${root.path}/android/settings.gradle').exists() ||
+            await File('${root.path}/android/settings.gradle.kts').exists() ||
+            await File('${root.path}/settings.gradle').exists() ||
+            await File('${root.path}/settings.gradle.kts').exists();
+        final flutterEntry = await File('${root.path}/lib/main.dart').exists();
+        final wrapperRoot = '${root.path}/android/gradle/wrapper';
+        final wrapperPlain = '${root.path}/gradle/wrapper';
+        final wrapperJar = await File('$wrapperRoot/gradle-wrapper.jar').exists() ||
+            await File('$wrapperPlain/gradle-wrapper.jar').exists();
+        final wrapperProperties = await File('$wrapperRoot/gradle-wrapper.properties').exists() ||
+            await File('$wrapperPlain/gradle-wrapper.properties').exists();
+        final gradleApp = await File('${root.path}/android/app/build.gradle').exists() ||
+            await File('${root.path}/android/app/build.gradle.kts').exists() ||
+            await File('${root.path}/app/build.gradle').exists() ||
+            await File('${root.path}/app/build.gradle.kts').exists();
+        final gradleWrapper = await File('${root.path}/android/gradlew').exists() || await File('${root.path}/gradlew').exists();
+        final supportedFlutter = flutter && flutterEntry && androidSettings && gradleApp && gradleWrapper && wrapperJar && wrapperProperties;
+        final supportedAndroid = !flutter && androidSettings && gradleApp && gradleWrapper && wrapperJar && wrapperProperties;
+        if (!supportedFlutter && !supportedAndroid) {
+          problems.add('Android build structure is incomplete: expected Flutter pubspec/lib/main.dart or Android Gradle app, plus settings, wrapper JAR and wrapper properties.');
+        }
+        if (problems.isNotEmpty) throw StateError(problems.join('\n'));
+        final summary = 'PASS: ${supportedFlutter ? 'Flutter Android' : 'Android Gradle'} project structure. Inspected $visited files; required Android build files exist; no blocked secret-file names were found. Full tests and APK compilation will run in GitHub Actions.';
+        _successfulValidationEvidence.add({
+          'command': 'workspace_inspection',
+          'args': <String>[],
+          'exit_code': 0,
+          'timed_out': false,
+          'truncated': false,
+          'output': summary,
+        });
+        return {'ok': true, 'projectType': supportedFlutter ? 'flutter' : 'android-gradle', 'filesInspected': visited, 'output': summary};
+      } catch (error) {
+        return {'ok': false, 'error': error.toString()};
+      }
+    }
+
+
       if (!allowFileWrites) {
         return {
           'ok': false,
@@ -129,7 +200,7 @@ class AgentToolRuntime {
       }
       const allowed = {
         'pwd', 'ls', 'find', 'grep', 'rg', 'cat', 'sed', 'awk', 'wc',
-        'head', 'tail', 'stat', 'git', 'gh', 'python3', 'python', 'pip3',
+        'head', 'tail', 'stat', 'git', 'gh', 'curl', 'python3', 'python', 'pip3',
         'node', 'npm', 'npx', 'java', 'javac', 'gradle', 'mvn', 'pytest',
         'cmake', 'make', 'gcc', 'g++', 'cargo', 'rustc', 'dart', 'flutter',
         'apt-get', 'bash', 'sh', 'tar', 'unzip', 'zip',

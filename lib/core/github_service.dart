@@ -1,3 +1,4 @@
+// TERMAI_GITHUB_AUTOMATION_UPDATE_20261116_V1
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'secure_vault.dart';
@@ -10,7 +11,7 @@ class GitHubService {
 
   Future<Map<String, String>> _headers() async {
     final token = await _vault.read('github.token');
-    if (token.isEmpty) throw StateError('أضف GitHub Personal Access Token في الإعدادات.');
+    if (token.isEmpty) throw StateError('اربط حساب GitHub من شاشة GitHub Workspace.');
     return {'Authorization': 'Bearer $token', 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json'};
   }
 

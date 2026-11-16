@@ -1,3 +1,4 @@
+// TERMAI_GITHUB_AUTOMATION_UPDATE_20261116_V1
 import 'dart:async';
 import 'package:material_ui/material_ui.dart';
 import 'package:uuid/uuid.dart';
@@ -6,6 +7,7 @@ import '../core/nexus_feature_suite.dart';
 import '../core/nexus_theme.dart';
 import '../core/project_coordinator.dart';
 import '../core/project_execution_manager.dart';
+import '../core/github_project_delivery_service.dart';
 import '../core/project_planning_job_store.dart';
 import '../models/domain.dart';
 import '../widgets/agent_avatar.dart';
@@ -391,6 +393,19 @@ class _AssistantScreenState extends State<AssistantScreen> {
     _scrollToLatest();
 
     try {
+      if (project.githubRepository == null) {
+        final delivery = GitHubProjectDeliveryService(coordinator: widget.coordinator);
+        final repository = await delivery.createProjectRepository(project, privateRepository: true);
+        if (mounted) {
+          setState(() {
+            _messages.add(_ChatMessage(
+              isUser: false,
+              text: 'أنشأت المستودع الخاص ${repository['full_name']} قبل بدء الوكلاء. سيعمل الفريق داخل Ubuntu ثم يرفع المصدر ويتابع Actions حتى ظهور APK.',
+            ));
+          });
+        }
+      }
+      await widget.coordinator.save(project);
       await widget.executionManager.enqueue(
         project,
         onTaskChanged: (_) {
@@ -402,14 +417,18 @@ class _AssistantScreenState extends State<AssistantScreen> {
         },
       );
       if (mounted) {
-        final failed = project.tasks.any((task) => task.status == TaskStatus.rolledBack || task.status == TaskStatus.failed || task.status == TaskStatus.interrupted);
+        final taskFailed = project.tasks.any((task) => task.status == TaskStatus.rolledBack || task.status == TaskStatus.failed || task.status == TaskStatus.interrupted);
+        final deliveryFailed = project.deploymentStatus == 'failed';
+        final delivered = project.deploymentStatus == 'succeeded' && project.githubRunUrl != null && project.githubArtifactUrl != null;
+        final failed = taskFailed || deliveryFailed || !delivered;
+        final details = deliveryFailed ? project.deploymentMessage : (taskFailed ? project.tasks.where((task) => task.status != TaskStatus.completed).map((task) => '${task.title}: ${task.result}').join('\n') : project.deploymentMessage);
         setState(() {
           _executedProjects.add(project.id);
           _messages.add(_ChatMessage(
             isUser: false,
             text: failed
-                ? 'انتهى مسار التنفيذ مع مهمة لم تكتمل. راجع سجل المحاولات ونتيجة المهمة داخل الخطة؛ لم أعتبر وجود الملفات دليلاً على نجاح بناء التطبيق.'
-                : 'اكتمل مسار المهام واجتاز وكيل الجودة أمر تحقق فعلياً داخل Ubuntu/PRoot. راجع سجل QA؛ نجاح الأمر لا يعني وحده أن التطبيق ثُبّت واختُبر على الجهاز.',
+                ? 'لم يكتمل تسليم التطبيق. السبب المسجل: ${details ?? 'لا يوجد تأكيد نهائي من GitHub Actions.'}\nالمستودع: ${project.githubRepositoryUrl ?? 'غير متاح'}\n${project.githubRunUrl == null ? '' : 'تشغيل Actions: ${project.githubRunUrl}'}'
+                : 'اكتمل التطبيق ونجح GitHub Actions، وتم التحقق من وجود APK artifact.\nالمستودع: ${project.githubRepositoryUrl}\nActions: ${project.githubRunUrl}\nنزّل TermiAI-APK من قسم Artifacts داخل صفحة التشغيل.',
             isError: failed,
           ));
         });
@@ -717,6 +736,60 @@ class _MessageBubble extends StatelessWidget {
   }
 }
 
+
+class _ProjectProgressPanel extends StatelessWidget {
+  const _ProjectProgressPanel({required this.project});
+  final ProjectRecord project;
+
+  @override
+  Widget build(BuildContext context) {
+    final completed = project.tasks.where((task) => task.status == TaskStatus.completed).length;
+    final total = project.tasks.length;
+    final taskRatio = total == 0 ? 0.0 : completed / total;
+    final deployment = project.deploymentStatus;
+    final percent = deployment == null ? taskRatio * 70 : project.deploymentProgress.clamp(0, 100) / 100;
+    final label = project.deploymentMessage ?? (total == 0 ? 'بانتظار اعتماد الخطة' : 'اكتمل $completed من $total مهام');
+    final failed = deployment == 'failed' || project.tasks.any((task) => task.status == TaskStatus.failed || task.status == TaskStatus.rolledBack || task.status == TaskStatus.interrupted);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: NexusPalette.elevated.withValues(alpha: .72),
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: (failed ? NexusPalette.danger : NexusPalette.primary).withValues(alpha: .25)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.timeline_rounded, color: NexusPalette.primaryLight, size: 18),
+          const SizedBox(width: 7),
+          const Expanded(child: Text('مساحة العمل والتسليم', style: TextStyle(color: NexusPalette.text, fontSize: 11, fontWeight: FontWeight.w900))),
+          Text('${(percent * 100).round()}%', style: const TextStyle(color: NexusPalette.primaryLight, fontSize: 11, fontWeight: FontWeight.w900)),
+        ]),
+        const SizedBox(height: 8),
+        ClipRRect(borderRadius: BorderRadius.circular(20), child: LinearProgressIndicator(value: percent.clamp(0, 1).toDouble(), minHeight: 7, backgroundColor: NexusPalette.border, color: failed ? NexusPalette.danger : NexusPalette.primaryLight)),
+        const SizedBox(height: 8),
+        Text(label, style: TextStyle(color: failed ? NexusPalette.danger : NexusPalette.muted, fontSize: 10, height: 1.45)),
+        if (total > 0) Text('المهام: $completed / $total • المتبقي: ${total - completed}', style: const TextStyle(color: NexusPalette.subtle, fontSize: 9)),
+        if (project.executionLog.isNotEmpty) ...[
+          const SizedBox(height: 7),
+          ...project.executionLog.reversed.take(4).map((entry) => Padding(
+            padding: const EdgeInsets.only(bottom: 3),
+            child: Text('• $entry', maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: NexusPalette.subtle, fontSize: 8, height: 1.35)),
+          )),
+        ],
+        if (project.githubRepositoryUrl != null) ...[
+          const SizedBox(height: 5),
+          SelectableText('GitHub: ${project.githubRepositoryUrl}', textDirection: TextDirection.ltr, style: const TextStyle(color: NexusPalette.primaryLight, fontSize: 9)),
+        ],
+        if (project.githubRunUrl != null) ...[
+          const SizedBox(height: 4),
+          SelectableText('Actions: ${project.githubRunUrl}', textDirection: TextDirection.ltr, style: const TextStyle(color: NexusPalette.primaryLight, fontSize: 9)),
+        ],
+      ]),
+    );
+  }
+}
+
 class _PlanBubble extends StatelessWidget {
   const _PlanBubble({required this.project, required this.canApprove, required this.executing, required this.cancelling, required this.alreadyExecuted, required this.onApprove, this.onCancel});
   final ProjectRecord project;
@@ -763,6 +836,8 @@ class _PlanBubble extends StatelessWidget {
               ),
             ]),
             const Divider(height: 22),
+            _ProjectProgressPanel(project: project),
+            const SizedBox(height: 12),
             ...project.tasks.asMap().entries.map((entry) => _TaskLine(index: entry.key + 1, task: entry.value)),
             const SizedBox(height: 12),
             if (canApprove)

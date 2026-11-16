@@ -1,4 +1,6 @@
+// TERMAI_GITHUB_AUTOMATION_UPDATE_20261116_V1
 import 'package:material_ui/material_ui.dart';
+import '../widgets/github_connection_card.dart';
 
 import '../core/github_service.dart';
 import '../core/nexus_theme.dart';
@@ -156,6 +158,7 @@ class _GitHubScreenState extends State<GitHubScreen> {
             FilledButton.tonalIcon(onPressed: _busy ? null : _createRepository, icon: const Icon(Icons.add_rounded), label: const Text('مستودع')),
           ]),
         ),
+        const GitHubConnectionCard(),
         if (_busy) const LinearProgressIndicator(minHeight: 2),
         if (_message.isNotEmpty)
           Padding(
@@ -178,7 +181,7 @@ class _GitHubScreenState extends State<GitHubScreen> {
                   const SizedBox(height: 13),
                   const Text('لا توجد مستودعات معروضة', style: TextStyle(color: NexusPalette.text, fontWeight: FontWeight.w900, fontSize: 14)),
                   const SizedBox(height: 6),
-                  const Text('أضف رمز GitHub في الإعدادات ثم حدّث القائمة.', textAlign: TextAlign.center, style: TextStyle(color: NexusPalette.muted, fontSize: 11)),
+                  const Text('اربط حسابك من بطاقة الاتصال أعلاه ثم حدّث قائمة المستودعات.', textAlign: TextAlign.center, style: TextStyle(color: NexusPalette.muted, fontSize: 11)),
                   const SizedBox(height: 12),
                   OutlinedButton.icon(onPressed: _busy ? null : _load, icon: const Icon(Icons.refresh_rounded), label: const Text('تحديث القائمة')),
                 ])))

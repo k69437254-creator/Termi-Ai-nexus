@@ -1,3 +1,4 @@
+// TERMAI_GITHUB_AUTOMATION_UPDATE_20261116_V1
 import 'dart:async';
 import 'dart:collection';
 
@@ -304,6 +305,13 @@ class ProjectExecutionManager {
           await _coordinator.save(persisted);
           _mirrorTaskStates(job.project, persisted, job.onTaskChanged);
         }
+        if (persisted.deploymentStatus != null &&
+            !const {'succeeded', 'failed', 'skipped', 'not_required'}.contains(persisted.deploymentStatus)) {
+          persisted.deploymentStatus = 'failed';
+          persisted.deploymentMessage = 'توقفت خدمة Android قبل إكمال نشر GitHub Actions.';
+          await _coordinator.save(persisted);
+          _mirrorTaskStates(job.project, persisted, job.onTaskChanged);
+        }
 
         if (_isExecutionFinished(persisted)) {
           return job.project;
@@ -382,10 +390,34 @@ class ProjectExecutionManager {
         // UI observers must not interrupt background project execution.
       }
     }
+    final deploymentChanged = target.deploymentStatus != source.deploymentStatus ||
+        target.deploymentMessage != source.deploymentMessage ||
+        target.deploymentProgress != source.deploymentProgress ||
+        target.githubRunUrl != source.githubRunUrl ||
+        target.githubArtifactUrl != source.githubArtifactUrl ||
+        target.githubCommitSha != source.githubCommitSha;
+    target.githubRepository = source.githubRepository;
+    target.githubRepositoryUrl = source.githubRepositoryUrl;
+    target.githubRunUrl = source.githubRunUrl;
+    target.githubArtifactUrl = source.githubArtifactUrl;
+    target.githubCommitSha = source.githubCommitSha;
+    target.githubRunId = source.githubRunId;
+    target.deploymentStatus = source.deploymentStatus;
+    target.deploymentMessage = source.deploymentMessage;
+    target.deploymentProgress = source.deploymentProgress;
+    target.executionLog
+      ..clear()
+      ..addAll(source.executionLog);
+    if (deploymentChanged && target.tasks.isNotEmpty) {
+      try { onTaskChanged?.call(target.tasks.last); } catch (_) {}
+    }
   }
 
   bool _isExecutionFinished(ProjectRecord project) {
     if (project.tasks.isEmpty) return false;
+    const terminalDeploymentStates = {'succeeded', 'failed', 'skipped', 'not_required'};
+    if (project.deploymentStatus != null &&
+        !terminalDeploymentStates.contains(project.deploymentStatus)) return false;
 
     return project.tasks.every(
       (task) =>

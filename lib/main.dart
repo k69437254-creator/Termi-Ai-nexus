@@ -1,3 +1,4 @@
+// TERMAI_GITHUB_AUTOMATION_UPDATE_20261116_V1
 import 'dart:async';
 import 'dart:ui' show DartPluginRegistrant;
 
@@ -7,6 +8,7 @@ import 'package:material_ui/material_ui.dart';
 import 'screens/startup_gate_screen.dart';
 import 'core/nexus_theme.dart';
 import 'core/project_coordinator.dart';
+import 'core/github_project_delivery_service.dart';
 import 'models/domain.dart';
 
 const MethodChannel _projectExecutionServiceChannel =
@@ -118,6 +120,42 @@ Future<void> projectExecutionEntrypoint(List<String> args) async {
               ? 'لم تكتمل مهام المشروع.'
               : incomplete;
     }
+    if (!success && activeProject.githubRepository?.isNotEmpty == true && activeProject.deploymentStatus != 'failed') {
+      activeProject.deploymentStatus = 'failed';
+      activeProject.deploymentMessage = errorMessage ?? 'فشلت مهام Linux قبل النشر.';
+      await coordinator.save(activeProject);
+    }
+    if (success && activeProject.githubRepository?.isNotEmpty == true) {
+      final delivery = GitHubProjectDeliveryService(coordinator: coordinator);
+      try {
+        await delivery.publishAndMonitor(
+          activeProject,
+          onProgress: (stage, message, percent) {
+            unawaited(
+              _projectExecutionServiceChannel.invokeMethod<void>(
+                'deploymentUpdate',
+                <String, Object?>{
+                  'projectId': projectId,
+                  'stage': stage,
+                  'message': message,
+                  'percent': percent,
+                },
+              ).catchError((Object _) {}),
+            );
+          },
+        );
+      } catch (deliveryError) {
+        success = false;
+        errorMessage = 'انتهى تنفيذ Linux لكن فشل تسليم GitHub Actions: $deliveryError';
+        if (activeProject.deploymentStatus != 'failed') {
+          activeProject.deploymentStatus = 'failed';
+          activeProject.deploymentMessage = errorMessage!;
+          activeProject.deploymentProgress =
+              activeProject.deploymentProgress.clamp(0, 99).toInt();
+          await coordinator.save(activeProject);
+        }
+      }
+    }
   } catch (error) {
     errorMessage = error.toString();
 
@@ -151,6 +189,16 @@ Future<void> projectExecutionEntrypoint(List<String> args) async {
                 'لم تبدأ هذه المهمة لأن تنفيذ المشروع توقف بسبب خطأ سابق.';
             changed = true;
           }
+        }
+
+        if (failedProject.githubRepository?.isNotEmpty == true &&
+            failedProject.deploymentStatus != 'failed') {
+          failedProject.deploymentStatus = 'failed';
+          failedProject.deploymentMessage =
+              'توقف تنفيذ المشروع بسبب خطأ: $errorMessage';
+          failedProject.deploymentProgress =
+              failedProject.deploymentProgress.clamp(0, 99).toInt();
+          changed = true;
         }
 
         if (changed) {

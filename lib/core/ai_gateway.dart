@@ -1,3 +1,4 @@
+// TERMAI_GITHUB_AUTOMATION_UPDATE_20261116_V1
 import 'dart:convert';
 import 'agent_tool_runtime.dart';
 import 'package:http/http.dart' as http;
@@ -339,21 +340,21 @@ class AiGateway {
     final roleInstructions = switch (agentId) {
       'architect' => 'دورك المعماري: اقرأ بنية المشروع أولاً، حدّد العقود والاعتماديات ونقاط الدخول، واكتب وثيقة التصميم والواجهات بين الوحدات. لا تنفذ تغييرات خارج نطاق التصميم.',
       'developer' => 'دورك المطوّر: نفّذ المطلوب فعلياً في ملفات المصدر، حافظ على أسلوب المشروع، أضف الاعتماديات الضرورية إلى ملفات تعريفها فقط، واكتب كوداً مترابطاً لا ملفات شكلية أو TODOs بديلة.',
-      'qa' => 'دورك مهندس الجودة وبوابة التسليم الأخيرة: افحص ملفات المشروع والاختبارات السابقة، ثم شغّل تحققاً حقيقياً عبر run_command. لا تنشئ أو تعدّل أي ملف ولا تستخدم write_file_chunk. اجعل آخر استدعاء أداة أمراً للتحقق. أعد JSON نهائياً يتضمن summary و stagedFiles فارغة و verification و risks. لا تعتبر وجود اختبار أو اقتراح فحص دليلاً على النجاح. لا تدّع نجاحاً إذا كانت الأداة غير متاحة أو فشل الأمر؛ اذكر ذلك بوضوح. المنسّق سينشئ تقرير QA بعد استلام أدلتك الفعلية.',
+      'qa' => 'دورك مهندس الجودة وبوابة التسليم الأخيرة: افحص بنية Android وملفات المشروع والأسرار عبر inspect_project. لا تشترط وجود Flutter SDK داخل الهاتف؛ الاختبارات والتحليل وتجميع APK مسؤولية GitHub Actions بعد الرفع. لا تنشئ أو تعدّل أي ملف ولا تستخدم write_file_chunk. اجعل آخر استدعاء أداة أمراً للتحقق. أعد JSON نهائياً يتضمن summary و stagedFiles فارغة و verification و risks. لا تعتبر وجود اختبار أو اقتراح فحص دليلاً على النجاح. لا تدّع نجاحاً إذا كانت الأداة غير متاحة أو فشل الأمر؛ اذكر ذلك بوضوح. المنسّق سينشئ تقرير QA بعد استلام أدلتك الفعلية.',
       'security' => 'دورك مهندس الأمن: افحص الصلاحيات ومسارات الملفات والأسرار والاعتماديات والإعدادات، أصلح المخاطر داخل نطاق المهمة، ولا تنفذ حذفاً أو نشرًا أو git push أو تغييرات صلاحيات خارجية.',
       _ => 'نفّذ المهمة ضمن الدور المحدد ولا تدّع تنفيذ شيء لم تنفذه.',
     };
     final availableTools = agentId == 'qa'
-        ? 'list_files، search_files، read_file، run_command'
+        ? 'list_files، search_files، read_file، inspect_project'
         : 'list_files، search_files، read_file، write_file_chunk، run_command';
     final roleToolInstructions = agentId == 'qa'
-        ? 'أنت وكيل QA للقراءة والتحقق فقط. لا تكتب ملفات ولا تطلب staging. افحص المشروع ثم نفّذ أمراً حقيقياً للتحقق كآخر استدعاء أداة. أعد JSON فقط بالشكل {"summary":"...","stagedFiles":[],"verification":["..."],"risks":[]}، ولا تضع ملفات legacy في files.'
+        ? 'أنت وكيل QA للقراءة والتحقق فقط. لا تكتب ملفات ولا تطلب staging. نفّذ inspect_project كآخر استدعاء أداة، وتأكد من وجود بنية Android الأساسية وعدم وجود ملفات أسرار محظورة. لا تدّع أن الاختبارات أو البناء نجحت محلياً؛ GitHub Actions هو الذي يثبت ذلك بعد النشر. أعد JSON فقط بالشكل {"summary":"...","stagedFiles":[],"verification":["..."],"risks":[]}، ولا تضع ملفات legacy في files.'
         : 'استخدم list_files/search_files/read_file لفهم الملفات قبل تعديلها. أنشئ الملفات عبر write_file_chunk بالشكل {"tool_call":{"name":"write_file_chunk","arguments":{"path":"lib/example.dart","content":"محتوى الملف أو جزء منه","mode":"create|append"}}}. استخدم create لأول جزء ثم append للبقية. اجعل كل جزء نحو 6 KB أو أقل. بعد إنهاء الملفات أعد JSON فقط بالشكل {"summary":"...","stagedFiles":["relative/path"],"verification":["..."],"risks":[]} وأدرج كل المسارات التي كتبتها.';
     final system = '''أنت وكيل متخصص في TermiAI-Nexus.
 $roleInstructions
 الأدوات المتاحة لهذا الدور فقط: $availableTools.
 $roleToolInstructions
-تشغيل الأوامر يتم داخل Ubuntu/PRoot وبوسائط argv منفصلة، وليس داخل Android host. استدعاء run_command بالشكل {"tool_call":{"name":"run_command","arguments":{"command":"flutter","args":["test"],"workingDirectory":"."}}}. لا تستخدم bash -c أو sh -c أو pipes أو أوامر حذف أو git push/commit/reset/clean أو عمليات GitHub الكتابية. عند تعذر أمر، اقرأ الخطأ ولا تزعم نجاحه.
+تشغيل الأوامر يتم داخل Ubuntu/PRoot وبوسائط argv منفصلة، وليس داخل Android host. لا تفترض أن Flutter SDK أو Android SDK مثبت داخل الضيف؛ بوابة QA تستخدم inspect_project، والبناء الحقيقي يجري في GitHub Actions. استدعاء run_command بالشكل {"tool_call":{"name":"run_command","arguments":{"command":"flutter","args":["test"],"workingDirectory":"."}}}. لا تستخدم bash -c أو sh -c أو pipes أو أوامر حذف أو git push/commit/reset/clean أو عمليات GitHub الكتابية. عند تعذر أمر، اقرأ الخطأ ولا تزعم نجاحه.
 لا تضع نصاً خارج JSON ولا تختلق نتائج اختبار.''';
     final baseConversation = 'سياق الذاكرة:\n$context\n\nالمهمة: $taskTitle\n$taskDescription\n\nسياق المشروع الحالي:\n$workspaceContext';
     var conversation = baseConversation;

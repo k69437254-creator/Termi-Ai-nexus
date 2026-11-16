@@ -1,3 +1,4 @@
+// TERMAI_GITHUB_AUTOMATION_UPDATE_20261116_V1
 package com.aram.termaix
 
 import android.content.Context
@@ -20,6 +21,7 @@ import java.net.URL
 import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
@@ -37,6 +39,7 @@ object LinuxRuntimeChannel {
     // ARAM_NEXUS_SOURCE_UPDATE_20261116: persisted progress snapshot and replay for Linux installation.
     private val installing = AtomicBoolean(false)
     @Volatile private var installEventSink: EventChannel.EventSink? = null
+    @Volatile private var deploymentEventSink: EventChannel.EventSink? = null
     @Volatile private var installAppContext: Context? = null
     @Volatile private var lastPersistedAt = 0L
     @Volatile private var lastInstallEvent: Map<String, Any?> = mapOf(
@@ -89,7 +92,7 @@ object LinuxRuntimeChannel {
         "head", "tail", "stat", "git", "gh", "python3", "python", "pip3",
         "node", "npm", "npx", "java", "javac", "gradle", "mvn", "pytest",
         "cmake", "make", "gcc", "g++", "cargo", "rustc", "dart", "flutter",
-        "apt-get", "bash", "sh", "tar", "unzip", "zip"
+        "apt-get", "bash", "sh", "tar", "unzip", "zip", "curl"
     )
 
     private data class ProcessResult(val exitCode: Int, val output: String, val timedOut: Boolean)
@@ -98,6 +101,15 @@ object LinuxRuntimeChannel {
         val app = context.applicationContext
 
         installAppContext = app
+        EventChannel(engine.dartExecutor.binaryMessenger, "termai/linux/deployment-events")
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
+                    deploymentEventSink = events
+                }
+                override fun onCancel(arguments: Any?) {
+                    deploymentEventSink = null
+                }
+            })
         val savedState = app.getSharedPreferences("termai_linux_install_state", Context.MODE_PRIVATE)
         val savedWasActive = savedState.getBoolean("active", false)
         if (savedState.contains("stage")) {
@@ -130,6 +142,38 @@ object LinuxRuntimeChannel {
         })
         MethodChannel(engine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
+                "publishWorkspace" -> {
+                    val workspace = call.argument<String>("workspacePath")
+                    val projectId = call.argument<String>("projectId")
+                    val repository = call.argument<String>("repository")
+                    val token = call.argument<String>("token")
+                    val message = call.argument<String>("commitMessage") ?: "Build Android app"
+                    if (workspace.isNullOrBlank() || projectId.isNullOrBlank() ||
+                        repository.isNullOrBlank() || token.isNullOrBlank()) {
+                        result.error("INVALID_GITHUB_PUBLISH", "بيانات نشر GitHub غير مكتملة.", null)
+                        return@setMethodCallHandler
+                    }
+                    thread(name = "termai-github-publish", isDaemon = true) {
+                        try {
+                            val response = publishWorkspace(app, projectId, workspace, repository, token, message) { stage, status, percent ->
+                                Handler(Looper.getMainLooper()).post {
+                                    deploymentEventSink?.success(mapOf(
+                                        "projectId" to projectId,
+                                        "stage" to stage,
+                                        "message" to status,
+                                        "percent" to percent
+                                    ))
+                                }
+                            }
+                            Handler(Looper.getMainLooper()).post { result.success(response) }
+                        } catch (error: Throwable) {
+                            val safe = error.message.orEmpty().replace(token, "[TOKEN REDACTED]")
+                            Handler(Looper.getMainLooper()).post {
+                                result.error("GITHUB_PUBLISH_FAILED", safe, null)
+                            }
+                        }
+                    }
+                }
                 "runProjectCommand" -> {
                     val workspace = call.argument<String>("workspacePath")
                     val command = call.argument<String>("command")
@@ -575,7 +619,8 @@ object LinuxRuntimeChannel {
         extraBinds: List<String>,
         workingDirectory: String,
         command: List<String>,
-        timeoutMs: Long
+        timeoutMs: Long,
+        extraEnvironment: Map<String, String> = emptyMap()
     ): ProcessResult {
         val native = File(context.applicationInfo.nativeLibraryDir)
         val proot = File(native, "libproot.so")
@@ -618,6 +663,7 @@ object LinuxRuntimeChannel {
             put("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
             put("TMPDIR", "/tmp")
             put("DEBIAN_FRONTEND", "noninteractive")
+            putAll(extraEnvironment)
         }
         val process = builder.start()
         val bytes = ByteArrayOutputStream()
@@ -645,14 +691,172 @@ object LinuxRuntimeChannel {
         return ProcessResult(if (finished) process.exitValue() else -1, output, !finished)
     }
 
-    /** Executes one argv-based command inside the app-private Ubuntu guest. */
+    /** Executes one argv-based command inside the app-private Ubuntu guest. */    private fun publishWorkspace(
+        context: Context,
+        projectId: String,
+        workspacePath: String,
+        repository: String,
+        token: String,
+        commitMessage: String,
+        progress: (String, String, Int) -> Unit
+    ): Map<String, Any> {
+        check(!installing.get()) { "تثبيت Ubuntu جارٍ؛ لا يمكن بدء النشر الآن." }
+        check(isInstalled(context)) { "Ubuntu/PRoot غير مثبت أو لم يجتز الفحص النهائي." }
+        require(repository.matches(Regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"))) { "اسم مستودع GitHub غير صالح." }
+        require(token.length in 20..512 && token.none { it.isWhitespace() || it == '\u0000' }) { "رمز GitHub غير صالح." }
+        require(commitMessage.isNotBlank() && commitMessage.length <= 180 && !commitMessage.contains('\n')) { "رسالة commit غير صالحة." }
+
+        val dataRoot = File(context.applicationInfo.dataDir).canonicalFile
+        val workspace = File(workspacePath).canonicalFile
+        require(workspace.isDirectory &&
+            workspace.parentFile?.name == "workspaces" &&
+            workspace.parentFile?.parentFile?.name == "TermiAI-Nexus" &&
+            workspace.path.startsWith(dataRoot.path + File.separator)) {
+            "مساحة العمل خارج مجلد مشاريع TermiAI-Nexus الخاص بالتطبيق."
+        }
+        val ignoredDirectories = setOf(".git", ".termai", ".dart_tool", ".gradle", "build", "node_modules", ".idea", "Pods")
+        val sensitiveNames = setOf(".env", ".npmrc", ".netrc", ".git-credentials", "google-services.json", "id_rsa", "id_ed25519", "local.properties", "key.properties")
+        val sensitiveExtensions = setOf(".pem", ".p12", ".pfx", ".jks", ".keystore", ".key", ".gpg")
+        val secretTokens = listOf(
+            Regex("-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+            Regex("\\bgh[pousr]_[A-Za-z0-9]{24,}\\b"),
+            Regex("\\bgithub_pat_[A-Za-z0-9_]{30,}\\b"),
+            Regex("\\bAKIA[0-9A-Z]{16}\\b"),
+            Regex("(?im)^\\s*(storePassword|keyPassword|keyAlias|signingPassword)\\s*=")
+        )
+        var fileCount = 0
+        var totalBytes = 0L
+        val unsafeFiles = mutableListOf<String>()
+        workspace.walkTopDown().onEnter { directory ->
+            if (java.nio.file.Files.isSymbolicLink(directory.toPath())) {
+                unsafeFiles.add(directory.relativeTo(workspace).invariantSeparatorsPath + " (symlink)")
+                false
+            } else {
+                directory == workspace || directory.name !in ignoredDirectories
+            }
+        }.forEach { file ->
+            val relative = file.relativeTo(workspace).invariantSeparatorsPath
+            if (java.nio.file.Files.isSymbolicLink(file.toPath())) {
+                unsafeFiles.add("$relative (symlink)")
+                return@forEach
+            }
+            if (!file.isFile) return@forEach
+            val parts = relative.split('/')
+            val name = parts.last().lowercase(Locale.ROOT)
+            val extension = name.substringAfterLast('.', "").let { if (it.isEmpty()) "" else ".$it" }
+            if (parts.any { it.lowercase(Locale.ROOT) in sensitiveNames } ||
+                (name.startsWith(".env.") && name !in setOf(".env.example", ".env.sample", ".env.template")) || name in sensitiveNames || extension in sensitiveExtensions) {
+                unsafeFiles.add(relative)
+                return@forEach
+            }
+            fileCount++
+            totalBytes += file.length()
+            check(fileCount <= 2500) { "عدد الملفات يتجاوز حد النشر الآمن (2500 ملف)." }
+            check(file.length() <= 20L * 1024L * 1024L && totalBytes <= 100L * 1024L * 1024L) {
+                "حجم ملفات المشروع يتجاوز حدود النشر (20 MB للملف و100 MB إجمالاً)."
+            }
+            if (file.length() <= 5L * 1024L * 1024L) {
+                val sample = runCatching { file.readText(Charsets.UTF_8) }.getOrDefault("")
+                if (secretTokens.any { it.containsMatchIn(sample) }) unsafeFiles.add("$relative (secret pattern)")
+            }
+        }
+        check(unsafeFiles.isEmpty()) {
+            "أُوقف النشر حفاظاً على الأسرار. ملفات يجب إزالتها أو نقلها خارج مساحة المصدر: ${unsafeFiles.take(8).joinToString(", ")}"
+        }
+
+        val ignoreFile = File(workspace, ".gitignore")
+        val ignoreLines = listOf(
+            ".termai/", ".dart_tool/", ".gradle/", "**/build/", "build/", "node_modules/", ".idea/",
+            ".env", ".env.*", "!.env.example", "!.env.sample", "!.env.template",
+            "*.jks", "*.keystore", "*.pem", "*.p12", "*.pfx", "*.key", "*.gpg",
+            ".git-credentials", ".npmrc", ".netrc", "google-services.json",
+            "local.properties", "key.properties"
+        )
+        val existing = if (ignoreFile.isFile) ignoreFile.readText() else ""
+        val additions = ignoreLines.filterNot { existing.lineSequence().any { line -> line.trim() == it } }
+        if (additions.isNotEmpty()) {
+            ignoreFile.appendText((if (existing.isNotEmpty() && !existing.endsWith("\n")) "\n" else "") + additions.joinToString("\n", postfix = "\n"))
+        }
+
+        val askPassName = "termai-github-askpass-$projectId.sh"
+        require(askPassName.matches(Regex("^[A-Za-z0-9_.-]+$"))) { "معرف المشروع غير صالح لمسار المساعد." }
+        val askPass = File(rootfs(context), "tmp/$askPassName")
+        check(askPass.parentFile?.mkdirs() == true || askPass.parentFile?.isDirectory == true) { "تعذر تجهيز قناة Git الآمنة." }
+        askPass.writeText(
+            "#!/bin/sh\ncase \"\$1\" in\n  *Username*) printf '%s\\n' 'x-access-token' ;;\n  *Password*) printf '%s\\n' \"\$GH_TOKEN\" ;;\n  *) exit 1 ;;\nesac\n"
+        )
+        check(askPass.setExecutable(true, true)) { "تعذر تفعيل Git askpass المؤقت." }
+        val guestAskPass = "/tmp/$askPassName"
+        val environment = mapOf(
+            "GH_TOKEN" to token,
+            "GIT_ASKPASS" to guestAskPass,
+            "SSH_ASKPASS" to guestAskPass,
+            "GIT_TERMINAL_PROMPT" to "0"
+        )
+        fun git(args: List<String>, stage: String, message: String): Map<String, Any> {
+            progress(stage, message, when (stage) {
+                "preflight" -> 5
+                "git_init" -> 15
+                "git_stage" -> 35
+                "git_commit" -> 55
+                "git_push" -> 75
+                else -> 80
+            })
+            val result = runProjectCommand(
+                context, workspace.absolutePath, "git", args, ".", 900,
+                allowGitWrite = true, extraEnvironment = environment
+            )
+            val output = result["output"]?.toString().orEmpty().replace(token, "[TOKEN REDACTED]")
+            check(result["ok"] == true) {
+                "فشل git ${args.joinToString(" ")}: ${output.take(1600)}"
+            }
+            return result
+        }
+        try {
+            progress("preflight", "اجتاز فحص الأسرار وحدود الحجم؛ يجهز Git داخل Ubuntu.", 5)
+            if (!File(workspace, ".git").isDirectory) {
+                git(listOf("init", "--initial-branch=main"), "git_init", "إنشاء مستودع Git محلي داخل مساحة عمل المشروع.")
+                git(listOf("config", "user.name", "TermiAI-Nexus"), "git_init", "ضبط هوية commit للمشروع.")
+                git(listOf("config", "user.email", "termai-nexus@users.noreply.github.com"), "git_init", "ضبط هوية commit للمشروع.")
+            }
+            val remoteCheck = runProjectCommand(context, workspace.absolutePath, "git", listOf("remote", "get-url", "origin"), ".", 30, allowGitWrite = true)
+            val expectedRemote = "https://github.com/$repository.git"
+            if (remoteCheck["ok"] == true) {
+                val currentRemote = remoteCheck["output"]?.toString()?.trim().orEmpty()
+                check(currentRemote == expectedRemote) { "مساحة العمل مرتبطة بمستودع مختلف؛ أوقف النظام النشر لمنع دفع المصدر إلى وجهة غير مقصودة." }
+            } else {
+                git(listOf("remote", "add", "origin", expectedRemote), "git_init", "ربط المستودع البعيد المحدد.")
+            }
+            git(listOf("add", "-A"), "git_stage", "تجهيز ملفات المصدر وWorkflow للنشر.")
+            git(listOf("diff", "--cached", "--check"), "git_stage", "فحص تنسيق التغييرات قبل commit.")
+            val staged = runProjectCommand(context, workspace.absolutePath, "git", listOf("diff", "--cached", "--name-only"), ".", 30, allowGitWrite = true)
+            val stagedNames = staged["output"]?.toString()?.trim().orEmpty()
+            val hasHead = runProjectCommand(context, workspace.absolutePath, "git", listOf("rev-parse", "--verify", "HEAD"), ".", 30, allowGitWrite = true)
+            if (stagedNames.isNotEmpty()) {
+                git(listOf("commit", "-m", commitMessage), "git_commit", "إنشاء commit لمصدر المشروع.")
+            } else {
+                check(hasHead["ok"] == true) { "لا توجد ملفات صالحة لإنشاء أول commit." }
+            }
+            git(listOf("push", "-u", "origin", "main"), "git_push", "رفع commit إلى GitHub عبر اتصال HTTPS آمن.")
+            val head = runProjectCommand(context, workspace.absolutePath, "git", listOf("rev-parse", "HEAD"), ".", 30, allowGitWrite = true)
+            check(head["ok"] == true) { "تم الرفع لكن تعذر قراءة commit SHA المحلي." }
+            progress("uploaded", "تم رفع المصدر بنجاح؛ يجري التحقق من GitHub Actions.", 80)
+            return mapOf("ok" to true, "repository" to repository, "commit" to head["output"].toString().trim(), "files" to fileCount, "bytes" to totalBytes)
+        } finally {
+            askPass.delete()
+        }
+    }
+
+
     private fun runProjectCommand(
         context: Context,
         workspacePath: String,
         command: String,
         args: List<String>,
         workingDirectory: String,
-        timeoutSeconds: Int
+        timeoutSeconds: Int,
+        allowGitWrite: Boolean = false,
+        extraEnvironment: Map<String, String> = emptyMap()
     ): Map<String, Any> {
         check(!installing.get()) { "تثبيت Ubuntu جارٍ؛ انتظر انتهاء التثبيت قبل تنفيذ أمر وكيل." }
         check(isInstalled(context)) { "Ubuntu/PRoot غير مثبت أو لم يجتز الفحص. لا يوجد تنفيذ أوامر على Android host كبديل." }
@@ -695,7 +899,7 @@ object LinuxRuntimeChannel {
 
         val cwd = resolveWorkspacePath(workingDirectory, allowDot = true)
         require(cwd.isDirectory) { "مجلد العمل غير موجود: $workingDirectory" }
-        if (command == "git") {
+        if (command == "git" && !allowGitWrite) {
             val verb = args.firstOrNull().orEmpty()
             require(verb in setOf("status", "diff", "log", "show", "rev-parse", "ls-files", "check-ignore")) {
                 "يسمح الوكيل بعمليات Git للقراءة فقط؛ العمليات الكتابية أو البعيدة تتطلب موافقة صريحة."
@@ -745,7 +949,8 @@ object LinuxRuntimeChannel {
             extraBinds = listOf("${workspace.absolutePath}:/workspace"),
             workingDirectory = guestCwd,
             command = listOf(command) + actualArgs,
-            timeoutMs = timeoutSeconds.toLong() * 1000L
+            timeoutMs = timeoutSeconds.toLong() * 1000L,
+            extraEnvironment = extraEnvironment
         )
         return mapOf(
             "ok" to (!result.timedOut && result.exitCode == 0),

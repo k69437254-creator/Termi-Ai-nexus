@@ -1,3 +1,4 @@
+// TERMAI_GITHUB_AUTOMATION_UPDATE_20261116_V1
 import 'package:material_ui/material_ui.dart';
 
 import '../core/nexus_theme.dart';
@@ -16,7 +17,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _base = TextEditingController();
   final _model = TextEditingController(text: 'Spark-X2.6-1.7B');
   final _ownerKey = TextEditingController();
-  final _githubToken = TextEditingController();
   final Map<String, TextEditingController> _agentKeys = {};
   bool _loading = true;
   bool _saving = false;
@@ -36,7 +36,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final storedModel = await _vault.read('ai.model');
     _model.text = storedModel.isEmpty ? 'Spark-X2.6-1.7B' : storedModel;
     _ownerKey.text = await _vault.read('ai.owner_key');
-    _githubToken.text = await _vault.read('github.token');
     for (final agent in AgentProfile.defaults) {
       _agentKeys[agent.id]!.text = await _vault.read('ai.agent.${agent.id}.key');
     }
@@ -49,7 +48,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await _vault.write('ai.base_url', _base.text);
       await _vault.write('ai.model', _model.text);
       await _vault.write('ai.owner_key', _ownerKey.text);
-      await _vault.write('github.token', _githubToken.text);
       for (final agent in AgentProfile.defaults) {
         await _vault.write('ai.agent.${agent.id}.key', _agentKeys[agent.id]!.text);
       }
@@ -66,7 +64,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _base.dispose();
     _model.dispose();
     _ownerKey.dispose();
-    _githubToken.dispose();
     for (final controller in _agentKeys.values) { controller.dispose(); }
     super.dispose();
   }
@@ -105,16 +102,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   padding: const EdgeInsets.only(bottom: 9),
                   child: TextField(controller: _agentKeys[agent.id], obscureText: true, decoration: InputDecoration(labelText: agent.name, prefixIcon: const Icon(Icons.vpn_key_outlined))),
                 )),
-          ]),
-        ),
-        _SettingSection(
-          icon: Icons.code_rounded,
-          title: 'GITHUB CONNECTION',
-          description: 'أضف رمزًا بصلاحيات محدودة حسب العمليات التي تنوي استخدامها.',
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            TextField(controller: _githubToken, obscureText: true, textDirection: TextDirection.ltr, decoration: const InputDecoration(labelText: 'GitHub Personal Access Token', prefixIcon: Icon(Icons.key_rounded))),
-            const SizedBox(height: 8),
-            const Text('عمليات إنشاء المستودعات والتذاكر وطلبات الدمج تحتاج صلاحيات مناسبة في GitHub. لا تشارك الرمز مع أي جهة.', style: TextStyle(color: NexusPalette.muted, fontSize: 10, height: 1.5)),
           ]),
         ),
         const SizedBox(height: 5),

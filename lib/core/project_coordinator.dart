@@ -1,3 +1,4 @@
+// TERMAI_GITHUB_AUTOMATION_UPDATE_20261116_V1
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
@@ -41,6 +42,9 @@ class ProjectCoordinator {
     final id = projectId?.trim().isNotEmpty == true
         ? projectId!.trim()
         : const Uuid().v4();
+    if (!RegExp(r'^[A-Za-z0-9_-]{8,64}$').hasMatch(id)) {
+      throw ArgumentError('معرف المشروع غير صالح؛ يجب أن يتكون من 8 إلى 64 حرفًا أو رقمًا أو شرطة.');
+    }
     final all = await listProjects();
     final existingIndex = all.indexWhere((item) => item.id == id);
     if (existingIndex >= 0) {
@@ -134,6 +138,12 @@ class ProjectCoordinator {
         if (task.status != TaskStatus.pending) break;
 
         task.status = TaskStatus.running;
+        project.deploymentStatus = project.githubRepository == null ? project.deploymentStatus : 'agents';
+        final finishedBefore = project.tasks.where((item) => item.status == TaskStatus.completed).length;
+        project.deploymentProgress = project.githubRepository == null ? project.deploymentProgress : (10 + (finishedBefore / project.tasks.length) * 60).clamp(10, 70).toDouble();
+        project.deploymentMessage = project.githubRepository == null ? project.deploymentMessage : 'الوكلاء ينفذون ${task.title} داخل Ubuntu/PRoot.';
+        project.executionLog.add('${DateTime.now().toIso8601String()} • بدأ ${task.title} بواسطة ${task.agentId}.');
+        if (project.executionLog.length > 120) project.executionLog.removeRange(0, project.executionLog.length - 120);
         await save(project);
         onTaskChanged?.call(task);
         var success = false;
@@ -199,12 +209,12 @@ class ProjectCoordinator {
             if (toolRuntime.stagedPaths.isNotEmpty) {
               throw StateError('QA attempted to stage files despite its read-only policy.');
             }
-            if (toolRuntime.lastToolName != 'run_command') {
-              throw StateError('QA must finish with an actual run_command tool call.');
+            if (toolRuntime.lastToolName != 'inspect_project') {
+              throw StateError('QA must finish with an actual inspect_project tool call.');
             }
             if (qaEvidence.isEmpty) {
               throw StateError(
-                'QA rejected: no executed validation command has a confirmed zero exit code and no timeout.',
+                'QA rejected: workspace inspection produced no successful structural evidence.',
               );
             }
 
@@ -217,7 +227,7 @@ class ProjectCoordinator {
               ..writeln('## Agent summary')
               ..writeln(output['summary'])
               ..writeln()
-              ..writeln('## Executed validation evidence')
+              ..writeln('## Executed workspace inspection evidence')
               ..writeln();
 
             for (var i = 0; i < qaEvidence.length; i++) {
@@ -328,6 +338,11 @@ class ProjectCoordinator {
                 '$validationText';
             task.status = TaskStatus.completed;
             success = true;
+            final finishedNow = project.tasks.where((item) => item.status == TaskStatus.completed).length;
+            project.deploymentProgress = project.githubRepository == null ? project.deploymentProgress : (10 + (finishedNow / project.tasks.length) * 60).clamp(10, 70).toDouble();
+            project.deploymentMessage = project.githubRepository == null ? project.deploymentMessage : 'اكتملت ${task.title}؛ ${finishedNow} من ${project.tasks.length} مهام.';
+            project.executionLog.add('${DateTime.now().toIso8601String()} • اكتملت ${task.title}؛ تغييرات الملفات: ${changedPaths.length}.');
+            if (project.executionLog.length > 120) project.executionLog.removeRange(0, project.executionLog.length - 120);
             await save(project);
             try {
               await memory.addAgent(task.agentId, 'نجحت المهمة ${task.title}. تغييرات الملفات: ${changedPaths.join(', ')}');
@@ -388,6 +403,8 @@ class ProjectCoordinator {
         }
         if (!success) {
           task.status = rollbackFailed ? TaskStatus.failed : TaskStatus.rolledBack;
+          project.executionLog.add('${DateTime.now().toIso8601String()} • فشلت ${task.title}: $lastError');
+          if (project.executionLog.length > 120) project.executionLog.removeRange(0, project.executionLog.length - 120);
           final rollbackMessage = rollbackFailed
               ? 'تعذر إثبات اكتمال التراجع الآمن؛ أوقف النظام المحاولات الإضافية.'
               : 'تم التراجع عن تغييرات المحاولة مع الحفاظ على التعديلات الخارجية المكتشفة.';

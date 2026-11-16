@@ -1,3 +1,4 @@
+// TERMAI_GITHUB_AUTOMATION_UPDATE_20261116_V1
 package com.aram.termaix
 
 import android.app.Notification
@@ -147,7 +148,22 @@ class ProjectExecutionService : Service() {
                     return@setMethodCallHandler
                 }
 
-                if (call.method != "complete") {
+                if (call.method != "complete") {                if (call.method == "deploymentUpdate") {
+                    val data = call.arguments as? Map<*, *>
+                    val updateProjectId = data?.get("projectId") as? String
+                    if (updateProjectId != activeProjectId) {
+                        result.success(false)
+                        return@setMethodCallHandler
+                    }
+                    val message = data?.get("message")?.toString()?.take(170)
+                        ?: "جارٍ نشر المشروع ومتابعة Actions."
+                    val percent = (data?.get("percent") as? Number)?.toInt()?.coerceIn(0, 100)
+                    updateNotification("${percent?.let { "$it% • " } ?: ""}$message")
+                    result.success(true)
+                    return@setMethodCallHandler
+                }
+
+
                     result.notImplemented()
                     return@setMethodCallHandler
                 }
@@ -253,8 +269,8 @@ class ProjectExecutionService : Service() {
         pendingCancellationProjectIds.remove(projectId)
         dartReady = false
         updateNotification(
-            if (success) "اكتمل تنفيذ المشروع $projectId"
-            else "تعذر إكمال المشروع $projectId: ${error ?: "خطأ غير معروف"}"
+            if (success) "اكتمل المشروع وتسليم APK بنجاح: $projectId"
+            else "فشل المشروع أو تسليم APK $projectId: ${error ?: "خطأ غير معروف"}"
         )
 
         val oldEngine = flutterEngine
