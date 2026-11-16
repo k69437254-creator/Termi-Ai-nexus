@@ -296,10 +296,11 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 ''';
-    else:
-      raise GitHubDeliveryException(
+    } else {
+      throw GitHubDeliveryException(
         'لم أتعرف على بنية Android قابلة للبناء. يلزم pubspec.yaml لمشروع Flutter، أو Gradle Wrapper وملفات app/build.gradle لمشروع Android.',
       );
+    }
     final workflowPath = Directory('${project.workspacePath}/.github/workflows');
     await workflowPath.create(recursive: true);
     await File('${workflowPath.path}/android-apk.yml').writeAsString(workflow, flush: true);

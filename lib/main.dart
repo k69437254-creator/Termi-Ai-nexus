@@ -149,9 +149,9 @@ Future<void> projectExecutionEntrypoint(List<String> args) async {
         errorMessage = 'انتهى تنفيذ Linux لكن فشل تسليم GitHub Actions: $deliveryError';
         if (activeProject.deploymentStatus != 'failed') {
           activeProject.deploymentStatus = 'failed';
-          activeProject.deploymentMessage = errorMessage!;
+          activeProject.deploymentMessage = errorMessage;
           activeProject.deploymentProgress =
-              activeProject.deploymentProgress.clamp(0, 99).toInt();
+              activeProject.deploymentProgress.clamp(0, 99).toDouble();
           await coordinator.save(activeProject);
         }
       }
@@ -197,7 +197,7 @@ Future<void> projectExecutionEntrypoint(List<String> args) async {
           failedProject.deploymentMessage =
               'توقف تنفيذ المشروع بسبب خطأ: $errorMessage';
           failedProject.deploymentProgress =
-              failedProject.deploymentProgress.clamp(0, 99).toInt();
+              failedProject.deploymentProgress.clamp(0, 99).toDouble();
           changed = true;
         }
 

@@ -32,7 +32,6 @@ class LinuxRuntimeService {
     return value ?? <String, dynamic>{};
   }
 
-  Future<Map<String, dynamic>> install() async {
   Future<Map<String, dynamic>> publishWorkspace({
     required String projectId,
     required String workspacePath,
@@ -50,11 +49,13 @@ class LinuxRuntimeService {
         'commitMessage': commitMessage,
       },
     );
-    if (result == null) throw StateError('Linux returned no Git publishing result.');
+    if (result == null) {
+      throw StateError('Linux returned no Git publishing result.');
+    }
     return result;
   }
 
-
+  Future<Map<String, dynamic>> install() async {
     final result = await _channel.invokeMapMethod<String, dynamic>('install');
     if (result == null || result['installed'] != true) {
       throw StateError('لم يؤكد محرك Android اكتمال تثبيت Ubuntu.');
