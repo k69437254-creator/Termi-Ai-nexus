@@ -99,7 +99,7 @@ class AgentToolRuntime {
           RegExp(r'\bgh[pousr]_[A-Za-z0-9]{24,}\b'),
           RegExp(r'\bgithub_pat_[A-Za-z0-9_]{30,}\b'),
           RegExp(r'\bAKIA[0-9A-Z]{16}\b'),
-          RegExp(r'(?im)^\s*(?:storePassword|keyPassword|signingPassword)\s*=\s*\S+'),
+          RegExp(r'^\s*(?:storePassword|keyPassword|signingPassword)\s*=\s*\S+', caseSensitive: false, multiLine: true),
         ];
         final problems = <String>[];
         var visited = 0;

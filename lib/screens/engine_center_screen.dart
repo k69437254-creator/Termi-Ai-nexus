@@ -41,7 +41,7 @@ class _EngineCenterScreenState extends State<EngineCenterScreen> {
     super.initState();
     _refreshStatus();
     _pollTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted && TickerMode.of(context)) _refreshStatus(silent: true);
+      if (mounted && TickerMode.valuesOf(context).enabled) _refreshStatus(silent: true);
     });
   }
 

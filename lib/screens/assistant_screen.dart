@@ -203,7 +203,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
     var escaped = false;
     for (var index = 0; index < fragment.length; index++) {
       final character = fragment[index];
-      if (character == '\"' && !escaped) {
+      if (character == '"' && !escaped) {
         fragment = fragment.substring(0, index);
         break;
       }
@@ -215,7 +215,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
     }
     for (var attempt = 0; attempt < 8 && fragment.isNotEmpty; attempt++) {
       try {
-        return jsonDecode('\"$fragment\"') as String;
+        return jsonDecode('"$fragment"') as String;
       } catch (_) {
         fragment = fragment.substring(0, fragment.length - 1);
       }

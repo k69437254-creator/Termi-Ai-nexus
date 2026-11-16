@@ -33,7 +33,7 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
     _refreshTimer = Timer.periodic(
       const Duration(seconds: 2),
       (_) {
-        if (mounted && TickerMode.of(context)) _refreshAutomatically();
+        if (mounted && TickerMode.valuesOf(context).enabled) _refreshAutomatically();
       },
     );
   }
@@ -245,7 +245,7 @@ class _ProjectDetailsState extends State<_ProjectDetails> {
   }
 
   void _refreshProject() {
-    if (!mounted || !TickerMode.of(context)) return;
+    if (!mounted || !TickerMode.valuesOf(context).enabled) return;
     setState(() => _future = _loadProject());
   }
 
