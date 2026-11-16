@@ -47,7 +47,9 @@ class _NexusFeatureLabScreenState extends State<NexusFeatureLabScreen> {
     super.initState();
     _loadProjects();
     _refreshMetrics();
-    _metricsTimer = Timer.periodic(const Duration(seconds: 5), (_) => _refreshMetrics());
+    _metricsTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (mounted && TickerMode.of(context)) _refreshMetrics();
+    });
     _refreshWorkflowRuns();
   }
 

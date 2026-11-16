@@ -32,7 +32,9 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
     _future = widget.coordinator.listProjects();
     _refreshTimer = Timer.periodic(
       const Duration(seconds: 2),
-      (_) => _refreshAutomatically(),
+      (_) {
+        if (mounted && TickerMode.of(context)) _refreshAutomatically();
+      },
     );
   }
 
@@ -243,7 +245,7 @@ class _ProjectDetailsState extends State<_ProjectDetails> {
   }
 
   void _refreshProject() {
-    if (!mounted) return;
+    if (!mounted || !TickerMode.of(context)) return;
     setState(() => _future = _loadProject());
   }
 

@@ -1,4 +1,5 @@
 // TERMAI_GITHUB_AUTOMATION_UPDATE_20261116_V1
+import 'dart:async';
 import 'dart:convert';
 import 'agent_tool_runtime.dart';
 import 'package:http/http.dart' as http;
@@ -20,17 +21,69 @@ class AiGateway {
   final http.Client _client;
   final SecureVault _vault = SecureVault.instance;
   static const MethodChannel _embeddedEngine = MethodChannel('termai/aram-engine');
+  static const EventChannel _generationEvents =
+      EventChannel('termai/aram-engine/generation-events');
+  static final Stream<Map<String, dynamic>> _generationEventStream =
+      _generationEvents.receiveBroadcastStream().map(
+        (event) => Map<String, dynamic>.from(event as Map),
+      ).asBroadcastStream();
+  static Future<void>? _generationStreamReadyFuture;
+
+  static Future<void> _waitForGenerationStream() {
+    return _generationStreamReadyFuture ??= () async {
+      final ready = Completer<void>();
+      final subscription = _generationEventStream.listen(
+        (event) {
+          if (event['type'] == 'ready' && !ready.isCompleted) {
+            ready.complete();
+          }
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          if (!ready.isCompleted) ready.completeError(error, stackTrace);
+        },
+      );
+      try {
+        await ready.future.timeout(const Duration(seconds: 5));
+      } finally {
+        await subscription.cancel();
+      }
+    }();
+  }
 
   Future<String> get baseUrl => _vault.read('ai.base_url');
   Future<String> get model => _vault.read('ai.model');
 
-  Future<String> chat({required String system, required String user, String? agentId, double temperature = 0.2, bool localEngineOnly = false, int maxTokens = 512, String? requestId}) async {
+  Future<String> chat({required String system, required String user, String? agentId, double temperature = 0.2, bool localEngineOnly = false, int maxTokens = 512, String? requestId, void Function(String token)? onToken}) async {
     final endpoint = (await baseUrl).trim();
     final selectedModel = (await model).trim();
 
     // Use the in-process Android engine for blank/loopback endpoints. This avoids
     // the previously observed localhost HTTP stall between TermiAI and Aram AI.
     if (localEngineOnly || _shouldUseEmbeddedEngine(endpoint)) {
+      final effectiveRequestId = requestId ?? const Uuid().v4();
+      StreamSubscription<Map<String, dynamic>>? tokenSubscription;
+      if (onToken != null) {
+        try {
+          await _waitForGenerationStream();
+          tokenSubscription = _generationEventStream.listen(
+            (event) {
+              if (event['type'] == 'token' &&
+                  event['requestId'] == effectiveRequestId) {
+                final token = event['token'];
+                if (token is String && token.isNotEmpty) onToken(token);
+              }
+              // Native done/error events are finalized by the MethodChannel call.
+            },
+            onError: (Object error, StackTrace stackTrace) {
+              // Streaming is optional; the final MethodChannel result is authoritative.
+              // This handler prevents unhandled EventChannel transport errors.
+            },
+          );
+        } catch (_) {
+          // Streaming is an enhancement; a failed event bridge must not block chat.
+          tokenSubscription = null;
+        }
+      }
       try {
         final answer = await _embeddedEngine.invokeMethod<String>('generate', {
           'system': system,
@@ -38,7 +91,7 @@ class AiGateway {
           'agentId': agentId,
           'temperature': temperature,
           'maxTokens': maxTokens,
-          'requestId': requestId ?? const Uuid().v4(),
+          'requestId': effectiveRequestId,
         });
         if (answer == null || answer.trim().isEmpty) {
           throw AiGatewayException('أعاد محرك Aram AI إجابة فارغة.');
@@ -48,6 +101,8 @@ class AiGateway {
         throw AiGatewayException(error.message ?? 'تعذر تشغيل محرك Aram AI الداخلي (${error.code}).');
       } catch (error) {
         throw AiGatewayException('تعذر الاتصال بمحرك Aram AI الداخلي: $error');
+      } finally {
+        if (tokenSubscription != null) await tokenSubscription.cancel();
       }
     }
 
@@ -335,7 +390,7 @@ class AiGateway {
   }) async {
     final context = _trim(
       await memory.contextFor(agentId: agentId, projectId: projectId),
-      4000,
+      3000,
     );
     final roleInstructions = switch (agentId) {
       'architect' => 'دورك المعماري: اقرأ بنية المشروع أولاً، حدّد العقود والاعتماديات ونقاط الدخول، واكتب وثيقة التصميم والواجهات بين الوحدات. لا تنفذ تغييرات خارج نطاق التصميم.',
@@ -356,10 +411,12 @@ $roleInstructions
 $roleToolInstructions
 تشغيل الأوامر يتم داخل Ubuntu/PRoot وبوسائط argv منفصلة، وليس داخل Android host. لا تفترض أن Flutter SDK أو Android SDK مثبت داخل الضيف؛ بوابة QA تستخدم inspect_project، والبناء الحقيقي يجري في GitHub Actions. استدعاء run_command بالشكل {"tool_call":{"name":"run_command","arguments":{"command":"flutter","args":["test"],"workingDirectory":"."}}}. لا تستخدم bash -c أو sh -c أو pipes أو أوامر حذف أو git push/commit/reset/clean أو عمليات GitHub الكتابية. عند تعذر أمر، اقرأ الخطأ ولا تزعم نجاحه.
 لا تضع نصاً خارج JSON ولا تختلق نتائج اختبار.''';
-    final baseConversation = 'سياق الذاكرة:\n$context\n\nالمهمة: $taskTitle\n$taskDescription\n\nسياق المشروع الحالي:\n$workspaceContext';
+    final boundedWorkspaceContext = _trim(workspaceContext, 14000);
+    final baseConversation = 'سياق الذاكرة:\n$context\n\nالمهمة: $taskTitle\n$taskDescription\n\nسياق المشروع الحالي:\n$boundedWorkspaceContext';
     var conversation = baseConversation;
     final toolHistory = <String>[];
-    const maxToolCalls = 64;
+    final repeatedToolCalls = <String, int>{};
+    const maxToolCalls = 32;
     for (var call = 0; call < maxToolCalls; call++) {
       final raw = await chat(
         agentId: agentId,
@@ -381,12 +438,29 @@ $roleToolInstructions
           toolCall['arguments'] is! Map) {
         throw const FormatException('صيغة استدعاء الأداة غير صالحة.');
       }
+      final toolSignature = jsonEncode({
+        'name': toolCall['name'],
+        'arguments': toolCall['arguments'],
+      });
+      final repeatCount = (repeatedToolCalls[toolSignature] ?? 0) + 1;
+      repeatedToolCalls[toolSignature] = repeatCount;
+      if (repeatCount >= 3) {
+        throw AiGatewayException(
+          'توقف الوكيل لأن استدعاء الأداة نفسه تكرر ثلاث مرات دون تقدم: ${toolCall['name']}.',
+        );
+      }
       final result = await toolRuntime.execute(
         toolCall['name'] as String,
         Map<String, dynamic>.from(toolCall['arguments'] as Map),
       );
-      toolHistory.add(jsonEncode(result));
-      if (toolHistory.length > 8) toolHistory.removeAt(0);
+      final encodedResult = jsonEncode(result);
+      toolHistory.add(encodedResult.length > 6000
+          ? jsonEncode({
+              'truncated': true,
+              'preview': encodedResult.substring(0, 6000),
+            })
+          : encodedResult);
+      if (toolHistory.length > 5) toolHistory.removeAt(0);
       conversation = '$baseConversation\n\nآخر نتائج الأدوات (الأقدم محذوفة لتثبيت حجم السياق):\n${toolHistory.join('\n')}\n\nملفات staging الحالية: ${jsonEncode(toolRuntime.stagedPaths)}\nتابع التنفيذ اعتماداً على النتائج الفعلية، ثم أعد JSON النهائي مع stagedFiles.';
     }
     throw AiGatewayException('تجاوز الوكيل الحد الأقصى لاستدعاءات الأدوات ($maxToolCalls) دون تسليم نهائي.');

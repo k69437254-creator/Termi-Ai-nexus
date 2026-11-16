@@ -83,6 +83,36 @@ void main() {
     expect(await blocker.readAsString(), 'not a directory');
   });
 
+  test('checkpoints skip regenerable build and dependency caches', () async {
+    await Directory('${temporaryRoot.path}/lib').create();
+    await File('${temporaryRoot.path}/lib/main.dart').writeAsString('void main() {}');
+    await Directory('${temporaryRoot.path}/build/outputs').create(recursive: true);
+    await File('${temporaryRoot.path}/build/outputs/large.bin').writeAsBytes(List<int>.filled(128, 1));
+    await Directory('${temporaryRoot.path}/.dart_tool/package_config').create(recursive: true);
+    await File('${temporaryRoot.path}/.dart_tool/package_config/cache.json').writeAsString('{}');
+
+    final checkpoint = await workspace.checkpoint('cache_exclusion');
+    expect(await File('${checkpoint.directory.path}/lib/main.dart').exists(), isTrue);
+    expect(await Directory('${checkpoint.directory.path}/build').exists(), isFalse);
+    expect(await Directory('${checkpoint.directory.path}/.dart_tool').exists(), isFalse);
+  });
+
+  test('checkpoint retention remains bounded after creating a new checkpoint', () async {
+    for (var index = 0; index < 20; index++) {
+      await workspace.checkpoint('retention_$index');
+    }
+    final root = Directory('${temporaryRoot.path}/.termai/checkpoints');
+    final entries = await root.list(followLinks: false).toList();
+    var directoryCount = 0;
+    for (final entry in entries) {
+      if (await FileSystemEntity.type(entry.path, followLinks: false) ==
+          FileSystemEntityType.directory) {
+        directoryCount++;
+      }
+    }
+    expect(directoryCount, lessThanOrEqualTo(16));
+  });
+
   test('stages file chunks and reads the completed staged manifest', () async {
     await workspace.stageFileChunk(
       'task_attempt_1', 'lib/main.dart', 'void main() {\n', append: false,

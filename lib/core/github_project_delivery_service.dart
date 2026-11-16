@@ -73,7 +73,7 @@ class GitHubProjectDeliveryService {
       if (error is GitHubDeliveryException) rethrow;
       throw GitHubDeliveryException('فشل الاتصال بـ GitHub: $error');
     }
-    final response = await http.Response.fromStream(streamed);
+    final response = await http.Response.fromStream(streamed).timeout(timeout);
     dynamic decoded;
     if (response.bodyBytes.isNotEmpty) {
       try {
@@ -86,8 +86,18 @@ class GitHubProjectDeliveryService {
       final message = decoded is Map ? decoded['message']?.toString() : null;
       final safeMessage = (message ?? 'HTTP ${response.statusCode}')
           .replaceAll(secret, '[TOKEN REDACTED]');
+      final acceptedPermissions = streamed.headers['x-accepted-github-permissions'];
+      final oauthScopes = streamed.headers['x-oauth-scopes'];
+      final permissionDetails = <String>[];
+      if (acceptedPermissions != null && acceptedPermissions.isNotEmpty) {
+        permissionDetails.add('الصلاحيات المقبولة لهذا الطلب: $acceptedPermissions');
+      }
+      if (oauthScopes != null && oauthScopes.isNotEmpty) {
+        permissionDetails.add('نطاقات Classic PAT التي أبلغ عنها GitHub: $oauthScopes');
+      }
+      final hint = permissionDetails.isEmpty ? '' : '\n${permissionDetails.join('\n')}';
       throw GitHubDeliveryException(
-        'رفض GitHub الطلب (${response.statusCode}): $safeMessage',
+        'رفض GitHub الطلب (${response.statusCode}): $safeMessage$hint\nتحقق من Resource owner ونطاق المستودعات وصلاحيات Repository creation وContents وWorkflows وActions.',
       );
     }
     return decoded;

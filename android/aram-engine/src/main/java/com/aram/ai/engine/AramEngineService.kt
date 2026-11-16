@@ -6,6 +6,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -31,6 +32,7 @@ class AramEngineService : Service() {
     @Volatile private var starting = false
     private var wakeLock: PowerManager.WakeLock? = null
     @Volatile private var deferredStopRequested = false
+    @Volatile private var activeGenerationCount = 0
 
     override fun onCreate() {
         super.onCreate()
@@ -46,7 +48,7 @@ class AramEngineService : Service() {
         }
         try {
             startForegroundCompat()
-            acquireWakeLock()
+            if (!ModelRuntime.isLoaded() || server == null) acquireWakeLock()
         } catch (error: Throwable) {
             AppPrefs.setEngineState(this, "ERROR", "تعذر بدء خدمة Aram AI: ${error.message ?: error.javaClass.simpleName}")
             stopSelf(startId)
@@ -197,6 +199,8 @@ class AramEngineService : Service() {
                         "READY",
                         "محرك Aram AI جاهز داخل TermiAI-Nexus · API على 127.0.0.1:8766"
                     )
+                    // Keep the CPU awake only while loading or actively generating.
+                    if (activeGenerationCount == 0) releaseWakeLock()
                     updateNotification("Aram AI جاهز داخل TermiAI-Nexus · المنفذ 8766")
 
                 } catch (error: Throwable) {
@@ -256,6 +260,18 @@ class AramEngineService : Service() {
         if (deferredStopRequested && ModelRuntime.activeExecutionLeaseCount() == 0) {
             stopEngine()
         }
+    }
+
+    @Synchronized
+    private fun beginGenerationWork() {
+        activeGenerationCount++
+        acquireWakeLock()
+    }
+
+    @Synchronized
+    private fun endGenerationWork() {
+        if (activeGenerationCount > 0) activeGenerationCount--
+        if (activeGenerationCount == 0) releaseWakeLock()
     }
 
     private fun acquireWakeLock() {
@@ -328,6 +344,31 @@ class AramEngineService : Service() {
         }
     }
 
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level < ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) return
+        scope.launch {
+            lifecycleMutex.withLock {
+                if (activeGenerationCount > 0 || ModelRuntime.activeExecutionLeaseCount() > 0) {
+                    return@withLock
+                }
+                runCatching { server?.stop() }
+                server = null
+                runCatching { ModelRuntime.unload("android_memory_pressure") }
+                if (!ModelRuntime.isLoaded()) {
+                    AppPrefs.setEngineState(
+                        this@AramEngineService,
+                        "STOPPED",
+                        "حرر Android ذاكرة محرك Aram AI بسبب ضغط الذاكرة؛ سيعاد تحميله عند الطلب."
+                    )
+                    releaseWakeLock()
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                }
+            }
+        }
+    }
+
     override fun onDestroy() {
         if (activeService === this) activeService = null
         runCatching { server?.stop() }
@@ -346,6 +387,14 @@ class AramEngineService : Service() {
 
         fun onExecutionLeaseReleased() {
             activeService?.resumeDeferredStopIfReady()
+        }
+
+        fun onGenerationStarted() {
+            activeService?.beginGenerationWork()
+        }
+
+        fun onGenerationFinished() {
+            activeService?.endGenerationWork()
         }
 
         const val ACTION_START = "com.aram.termaix.aram.START"

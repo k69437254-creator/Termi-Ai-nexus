@@ -36,6 +36,10 @@ class WorkspaceApplyException implements Exception {
 class ProjectWorkspace {
   ProjectWorkspace(this.rootPath);
   final String rootPath;
+  static const Set<String> _checkpointIgnoredDirectories = {
+    '.dart_tool', '.gradle', 'build', 'node_modules', 'vendor',
+    'coverage', '.next', 'dist', 'Pods', 'target',
+  };
   Directory get root => Directory(rootPath);
 
   Future<void> initialize() async {
@@ -46,12 +50,14 @@ class ProjectWorkspace {
 
   Future<WorkspaceCheckpoint> checkpoint(String label) async {
     await initialize();
+    await _pruneOldCheckpoints();
     final normalizedLabel = label.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
     final safeLabel = normalizedLabel.substring(0, normalizedLabel.length > 36 ? 36 : normalizedLabel.length);
     final stamp = DateTime.now().toUtc().toIso8601String().replaceAll(':', '-');
     final backup = Directory(p.join(rootPath, '.termai', 'checkpoints', '${stamp}_$safeLabel'));
     await backup.create(recursive: true);
     await _copyTree(root, backup, skipTermaiCheckpoints: true);
+    await _pruneOldCheckpoints();
     return WorkspaceCheckpoint(directory: backup, createdAt: DateTime.now());
   }
 
@@ -784,12 +790,46 @@ class ProjectWorkspace {
     await file.writeAsString(content, flush: true);
   }
 
-  Future<void> _copyTree(Directory source, Directory target, {required bool skipTermaiCheckpoints}) async {
+  Future<void> _pruneOldCheckpoints() async {
+    final checkpointRoot = Directory(p.join(rootPath, '.termai', 'checkpoints'));
+    if (!await checkpointRoot.exists()) return;
+
+    final checkpoints = <MapEntry<Directory, DateTime>>[];
+    await for (final entity in checkpointRoot.list(followLinks: false)) {
+      if (await FileSystemEntity.type(entity.path, followLinks: false) !=
+          FileSystemEntityType.directory) {
+        continue;
+      }
+      final directory = Directory(entity.path);
+      final modified = (await directory.stat()).modified;
+      checkpoints.add(MapEntry<Directory, DateTime>(directory, modified));
+    }
+
+    checkpoints.sort((first, second) {
+      final byModified = second.value.compareTo(first.value);
+      if (byModified != 0) return byModified;
+      // Directory names start with the UTC creation timestamp; use it to
+      // deterministically retain the newest snapshot when filesystem mtimes tie.
+      return p.basename(second.key.path).compareTo(p.basename(first.key.path));
+    });
+    const maximumCheckpoints = 16;
+    for (final obsolete in checkpoints.skip(maximumCheckpoints)) {
+      try {
+        if (await obsolete.key.exists()) {
+          await obsolete.key.delete(recursive: true);
+        }
+      } on FileSystemException {
+        // Preserve the workspace if an OS lock temporarily prevents pruning.
+      }
+    }
+  }
+Future<void> _copyTree(Directory source, Directory target, {required bool skipTermaiCheckpoints}) async {
     await target.create(recursive: true);
     await for (final entity in source.list(followLinks: false)) {
       final name = p.basename(entity.path);
       if (name == '.git' ||
           (skipTermaiCheckpoints && name == '.termai') ||
+          (entity is Directory && _checkpointIgnoredDirectories.contains(name)) ||
           ApprovalPolicy.isSensitivePathSegment(name)) {
         continue;
       }

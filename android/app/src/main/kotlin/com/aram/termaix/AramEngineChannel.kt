@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import com.aram.ai.data.ApiKeyStore
 import com.aram.ai.data.ModelFiles
@@ -21,6 +22,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicReference
 
 object AramEngineChannel {
     private const val CHANNEL = "termai/aram-engine"
@@ -33,7 +35,21 @@ object AramEngineChannel {
 
     fun register(engine: FlutterEngine, appContext: Context, activity: Activity? = null) {
         val context = appContext.applicationContext
-        MethodChannel(engine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
+    val generationEventSink = AtomicReference<EventChannel.EventSink?>(null)
+    EventChannel(
+        engine.dartExecutor.binaryMessenger,
+        "$CHANNEL/generation-events"
+    ).setStreamHandler(object : EventChannel.StreamHandler {
+        override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
+            generationEventSink.set(events)
+            events.success(mapOf("type" to "ready"))
+        }
+
+        override fun onCancel(arguments: Any?) {
+            generationEventSink.set(null)
+        }
+    })
+    MethodChannel(engine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             val keyStore by lazy { ApiKeyStore(context) }
             try {
                 when (call.method) {
@@ -216,11 +232,30 @@ object AramEngineChannel {
                                     systemPrompt = system,
                                     maxTokens = maxTokens,
                                     priority = 0,
-                                    requestId = requestId
-                                ) { }
-                                main.post { result.success(answer) }
+                                    requestId = requestId,
+                                    onToken = { token ->
+                                        main.post {
+                                            generationEventSink.get()?.success(mapOf(
+                                                "type" to "token",
+                                                "requestId" to requestId,
+                                                "token" to token
+                                            ))
+                                        }
+                                    }
+                                )
+                                main.post {
+                                    generationEventSink.get()?.success(mapOf("type" to "done", "requestId" to requestId))
+                                    result.success(answer)
+                                }
                             } catch (error: Throwable) {
-                                main.post { result.error("ARAM_GENERATION_FAILED", error.message ?: error.javaClass.simpleName, null) }
+                                main.post {
+                                    generationEventSink.get()?.success(mapOf(
+                                        "type" to "error",
+                                        "requestId" to requestId,
+                                        "message" to (error.message ?: error.javaClass.simpleName)
+                                    ))
+                                    result.error("ARAM_GENERATION_FAILED", error.message ?: error.javaClass.simpleName, null)
+                                }
                             }
                         }
                     }

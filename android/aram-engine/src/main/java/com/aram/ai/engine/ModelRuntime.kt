@@ -298,34 +298,56 @@ object ModelRuntime {
     }
 
     private suspend fun runGeneration(request: QueuedGeneration): String = generationLock.withLock {
-        val instance = engine ?: error("لم يتم تحميل النموذج بعد")
-        check(loaded) { "النموذج غير جاهز" }
         val output = StringBuilder()
-        if (!systemPromptConfigured) {
-            instance.setSystemPrompt(DEFAULT_NATIVE_SYSTEM_PROMPT)
-            systemPromptConfigured = true
-            Log.i(TAG, "NATIVE_SYSTEM_PROMPT_SET pid=${Process.myPid()}")
-        }
-        val effectivePrompt = buildString {
-            append("تعليمات هذه الرسالة:\n")
-            append(request.systemPrompt.ifBlank { DEFAULT_NATIVE_SYSTEM_PROMPT })
-            append("\n\nرسالة المستخدم:\n")
-            append(request.prompt)
-        }
-        synchronized(request) {
-            if (request.cancelRequested || request.result.isCancelled) {
-                throw CancellationException("تم إلغاء الطلب قبل بدء التوليد")
+        var generationRegistered = false
+        try {
+            // Atomically validate the engine and register native work while holding
+            // the same lifecycle lock used by load/unload.
+            val instance = initLock.withLock {
+                val current = engine ?: error("لم يتم تحميل النموذج بعد")
+                check(loaded && acceptingRequests && engine === current) {
+                    "النموذج غير جاهز أو بدأ إيقاف استقبال الطلبات"
+                }
+                synchronized(request) {
+                    if (request.cancelRequested || request.result.isCancelled) {
+                        throw CancellationException("تم إلغاء الطلب قبل بدء التوليد")
+                    }
+                    AramEngineService.onGenerationStarted()
+                    try {
+                        current.beginGeneration()
+                        request.nativeStarted = true
+                        generationRegistered = true
+                    } catch (failure: Throwable) {
+                        AramEngineService.onGenerationFinished()
+                        throw failure
+                    }
+                }
+                current
             }
-            instance.beginGeneration()
-            request.nativeStarted = true
-        }
-        withContext(Dispatchers.Default) {
-            instance.sendUserPrompt(effectivePrompt, request.maxTokens).collect { token ->
-                output.append(token)
-                request.onToken(token)
+
+            if (!systemPromptConfigured) {
+                instance.setSystemPrompt(DEFAULT_NATIVE_SYSTEM_PROMPT)
+                systemPromptConfigured = true
+                Log.i(TAG, "NATIVE_SYSTEM_PROMPT_SET pid=${Process.myPid()}")
+            }
+            val effectivePrompt = buildString {
+                append("تعليمات هذه الرسالة:\n")
+                append(request.systemPrompt.ifBlank { DEFAULT_NATIVE_SYSTEM_PROMPT })
+                append("\n\nرسالة المستخدم:\n")
+                append(request.prompt)
+            }
+            withContext(Dispatchers.Default) {
+                instance.sendUserPrompt(effectivePrompt, request.maxTokens).collect { token ->
+                    output.append(token)
+                    request.onToken(token)
+                }
+            }
+            output.toString()
+        } finally {
+            if (generationRegistered) {
+                AramEngineService.onGenerationFinished()
             }
         }
-        output.toString()
     }
 
     fun pendingRequestCount(): Int = synchronized(queueMonitor) { pending.count { !it.result.isCancelled } }

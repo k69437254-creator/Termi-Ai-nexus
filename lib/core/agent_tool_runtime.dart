@@ -1,6 +1,8 @@
 // TERMAI_GITHUB_AUTOMATION_UPDATE_20261116_V1
+import 'dart:convert';
 import 'dart:io';
 
+import 'approval_policy.dart';
 import 'agent_command_executor.dart';
 import 'project_workspace.dart';
 
@@ -85,33 +87,54 @@ class AgentToolRuntime {
       }
     }
 
-    if (toolName == 'write_file_chunk') {    if (toolName == 'inspect_project') {
+    if (toolName == 'inspect_project') {
       try {
         final root = Directory(workspace.rootPath);
         if (!await root.exists()) throw StateError('Workspace directory does not exist.');
         const ignored = {'.git', '.termai', '.dart_tool', '.gradle', 'build', 'node_modules', '.idea'};
         const sensitiveNames = {'.env', '.npmrc', '.netrc', '.git-credentials', 'google-services.json'};
         const sensitiveExtensions = {'.pem', '.p12', '.pfx', '.jks', '.keystore', '.key'};
+        final secretPatterns = <RegExp>[
+          RegExp(r'-----BEGIN [A-Z ]*PRIVATE KEY-----'),
+          RegExp(r'\bgh[pousr]_[A-Za-z0-9]{24,}\b'),
+          RegExp(r'\bgithub_pat_[A-Za-z0-9_]{30,}\b'),
+          RegExp(r'\bAKIA[0-9A-Z]{16}\b'),
+          RegExp(r'(?im)^\s*(?:storePassword|keyPassword|signingPassword)\s*=\s*\S+'),
+        ];
         final problems = <String>[];
         var visited = 0;
         await for (final entity in root.list(recursive: true, followLinks: false)) {
           final relative = entity.path.substring(root.path.length).replaceAll('\\', '/').replaceFirst(RegExp(r'^/'), '');
           final parts = relative.split('/');
           if (parts.any(ignored.contains)) continue;
+          if (parts.any(ApprovalPolicy.isSensitivePathSegment)) {
+            problems.add('Sensitive path must not be published: $relative');
+            continue;
+          }
           if (await FileSystemEntity.type(entity.path, followLinks: false) == FileSystemEntityType.link) {
             problems.add('Symlink found: $relative');
             continue;
           }
           if (entity is File) {
+            if (visited >= 2500) {
+              problems.add('Workspace exceeds the 2500-file inspection limit.');
+              break;
+            }
             visited++;
             final name = parts.last.toLowerCase();
             final extension = name.contains('.') ? name.substring(name.lastIndexOf('.')) : '';
-            if (sensitiveNames.contains(name) || sensitiveExtensions.contains(extension) || (name.startsWith('.env.') && !const {'.env.example', '.env.sample', '.env.template'}.contains(name))) {
+            if (sensitiveNames.contains(name) || ApprovalPolicy.isSensitivePathSegment(name) || sensitiveExtensions.contains(extension) || (name.startsWith('.env.') && !const {'.env.example', '.env.sample', '.env.template'}.contains(name))) {
               problems.add('Sensitive file must not be published: $relative');
             }
-            if (visited > 2500) {
-              problems.add('Workspace exceeds the 2500-file inspection limit.');
-              break;
+            final fileSize = await entity.length();
+            if (fileSize <= 2 * 1024 * 1024) {
+              final bytes = await entity.readAsBytes();
+              if (!bytes.contains(0)) {
+                final text = utf8.decode(bytes, allowMalformed: true);
+                if (secretPatterns.any((pattern) => pattern.hasMatch(text))) {
+                  problems.add('Embedded credential pattern found: $relative');
+                }
+              }
             }
           }
         }
@@ -138,7 +161,7 @@ class AgentToolRuntime {
           problems.add('Android build structure is incomplete: expected Flutter pubspec/lib/main.dart or Android Gradle app, plus settings, wrapper JAR and wrapper properties.');
         }
         if (problems.isNotEmpty) throw StateError(problems.join('\n'));
-        final summary = 'PASS: ${supportedFlutter ? 'Flutter Android' : 'Android Gradle'} project structure. Inspected $visited files; required Android build files exist; no blocked secret-file names were found. Full tests and APK compilation will run in GitHub Actions.';
+        final summary = 'PASS: ${supportedFlutter ? 'Flutter Android' : 'Android Gradle'} project structure. Inspected $visited files; required Android build files exist; no blocked paths or known embedded credential patterns were found. Full tests and APK compilation will run in GitHub Actions.';
         _successfulValidationEvidence.add({
           'command': 'workspace_inspection',
           'args': <String>[],
@@ -154,6 +177,7 @@ class AgentToolRuntime {
     }
 
 
+    if (toolName == 'write_file_chunk') {
       if (!allowFileWrites) {
         return {
           'ok': false,

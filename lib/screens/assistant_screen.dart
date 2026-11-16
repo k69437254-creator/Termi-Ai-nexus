@@ -1,5 +1,6 @@
 // TERMAI_GITHUB_AUTOMATION_UPDATE_20261116_V1
 import 'dart:async';
+import 'dart:convert';
 import 'package:material_ui/material_ui.dart';
 import 'package:uuid/uuid.dart';
 
@@ -41,6 +42,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
   final Set<String> _executedProjects = {};
   bool _planning = false;
   String _planningMessage = 'أراجع الطلب وأجهّز الخطة…';
+  String _streamingReply = '';
   final ProjectPlanningJobStore _planningJobs = ProjectPlanningJobStore();
   bool _executing = false;
   bool _cancellingExecution = false;
@@ -194,6 +196,33 @@ class _AssistantScreenState extends State<AssistantScreen> {
     }
   }
 
+  String? _partialReplyFromJson(String raw) {
+    final match = RegExp(r'\"reply\"\s*:\s*\"').firstMatch(raw);
+    if (match == null) return null;
+    var fragment = raw.substring(match.end);
+    var escaped = false;
+    for (var index = 0; index < fragment.length; index++) {
+      final character = fragment[index];
+      if (character == '\"' && !escaped) {
+        fragment = fragment.substring(0, index);
+        break;
+      }
+      if (character == '\\' && !escaped) {
+        escaped = true;
+      } else {
+        escaped = false;
+      }
+    }
+    for (var attempt = 0; attempt < 8 && fragment.isNotEmpty; attempt++) {
+      try {
+        return jsonDecode('\"$fragment\"') as String;
+      } catch (_) {
+        fragment = fragment.substring(0, fragment.length - 1);
+      }
+    }
+    return null;
+  }
+
   bool _looksLikeExplicitProjectRequest(String prompt) {
     final value = prompt.toLowerCase();
     const phrases = <String>[
@@ -258,9 +287,18 @@ class _AssistantScreenState extends State<AssistantScreen> {
       await _createProjectFromJob(current, request);
       return;
     }
+    var streamedRaw = '';
+    if (mounted) setState(() => _streamingReply = '');
     final raw = await widget.coordinator.gateway.chat(
       agentId: 'manager', temperature: 0.2, localEngineOnly: true,
       maxTokens: 512, requestId: current.id,
+      onToken: (token) {
+        streamedRaw += token;
+        final preview = _partialReplyFromJson(streamedRaw);
+        if (preview != null && mounted && preview != _streamingReply) {
+          setState(() => _streamingReply = preview);
+        }
+      },
       system: 'You are the main conversational director of TermiAI-Nexus. '
         'Classify the latest user message using the conversation context. '
         'Return one JSON object only. For normal conversation use '
@@ -277,6 +315,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
     final type = result['type']?.toString();
     final projectRequest = result['request']?.toString().trim() ?? '';
     if (type == 'project' && projectRequest.isNotEmpty) {
+      if (mounted) setState(() => _streamingReply = '');
       await _createProjectFromJob(current, projectRequest);
       return;
     }
@@ -287,6 +326,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
     setState(() {
       _planning = false;
       _planningMessage = '';
+      _streamingReply = '';
       _messages.add(_ChatMessage(isUser: false, text: reply));
     });
     await _persistConversation();
@@ -312,6 +352,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
         setState(() {
           _planning = false;
           _planningMessage = '';
+          _streamingReply = '';
           _messages.add(_ChatMessage(isUser: false,
             text: 'تعذر إكمال إعداد خطة العمل: $error', isError: true));
         });
@@ -330,6 +371,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
     setState(() {
       _planning = true;
       _planningMessage = 'جارٍ فهم الطلب…';
+      _streamingReply = '';
       _pendingImage = null;
       _pendingProjectId = null;
       _messages.add(_ChatMessage(isUser: true, text: selectedImage == null ? prompt : '$prompt\n[صورة مرفقة]'));
@@ -368,6 +410,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
         setState(() {
           _planning = false;
           _planningMessage = '';
+          _streamingReply = '';
           _messages.add(_ChatMessage(isUser: false,
             text: 'تعذر فهم الاستجابة أو إكمال الطلب: $error', isError: true));
         });
@@ -537,7 +580,10 @@ class _AssistantScreenState extends State<AssistantScreen> {
                   onCancel: _executing && message.project?.id == _executingProjectId ? _cancelExecution : null,
                       );
                     }
-                    return _TypingBubble(executing: _executing, message: _planningMessage);
+                    final progressText = _streamingReply.isEmpty
+                        ? _planningMessage
+                        : '$_planningMessage\n\n$_streamingReply';
+                    return _TypingBubble(executing: _executing, message: progressText);
                   },
                 ),
               ],

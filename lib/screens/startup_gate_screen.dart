@@ -189,19 +189,25 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
   }
 
   Future<void> _prepareModel() async {
+    final deadline = DateTime.now().add(const Duration(minutes: 90));
     var status = await _engine.status();
     var state = status['state']?.toString() ?? 'UNKNOWN';
     if (status['modelAvailable'] != true) {
       if (state != 'DOWNLOADING_MODEL') {
         await _engine.downloadModel();
       }
-      while (true) {
+      while (status['modelAvailable'] != true) {
+        if (DateTime.now().isAfter(deadline)) {
+          throw TimeoutException('تجاوز تنزيل نموذج Aram AI مهلة 90 دقيقة.');
+        }
         await Future<void>.delayed(const Duration(seconds: 2));
         status = await _engine.status();
         state = status['state']?.toString() ?? 'UNKNOWN';
-        if (status['modelAvailable'] == true) break;
         if (state == 'ERROR') {
           throw StateError(status['message']?.toString() ?? 'فشل تنزيل نموذج Aram AI.');
+        }
+        if (status['transferPaused'] == true || status['transferStage'] == 'PAUSED') {
+          throw StateError('تنزيل النموذج متوقف مؤقتاً من Android Download Manager؛ تحقق من الشبكة ثم أعد المحاولة.');
         }
       }
     }
@@ -210,6 +216,9 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
       await _engine.start();
     }
     while (true) {
+      if (DateTime.now().isAfter(deadline)) {
+        throw TimeoutException('تجاوز تشغيل محرك Aram AI مهلة 90 دقيقة.');
+      }
       await Future<void>.delayed(const Duration(seconds: 2));
       status = await _engine.status();
       state = status['state']?.toString() ?? 'UNKNOWN';
@@ -222,15 +231,21 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
 
   Future<void> _prepareLinux() async {
     if (await _linux.isInstalled()) return;
-    // If the same Android process still owns a live installation worker, attach by
-    // polling its persisted status instead of issuing a second install() call.
+    final deadline = DateTime.now().add(const Duration(minutes: 90));
+    // Attach to an existing native worker instead of issuing a duplicate install.
     while (true) {
+      if (DateTime.now().isAfter(deadline)) {
+        throw TimeoutException('تجاوز تجهيز Ubuntu مهلة 90 دقيقة.');
+      }
       final status = await _linux.installStatus();
       if (status['installed'] == true || await _linux.isInstalled()) return;
       if (status['active'] != true) break;
       await Future<void>.delayed(const Duration(seconds: 2));
     }
-    final result = await _linux.install();
+    final result = await _linux.install().timeout(
+      const Duration(minutes: 90),
+      onTimeout: () => throw TimeoutException('تجاوز تثبيت Ubuntu مهلة 90 دقيقة؛ قد يستمر عامل Android الحالي، وسيتم فحص حالته قبل أي محاولة جديدة.'),
+    );
     if (result['installed'] != true || !await _linux.isInstalled()) {
       throw StateError('لم يجتز Ubuntu وأدوات Linux فحص التثبيت النهائي.');
     }

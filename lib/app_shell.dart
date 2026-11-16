@@ -26,6 +26,7 @@ class _AppShellState extends State<AppShell> {
   late final ProjectExecutionManager _executionManager =
       ProjectExecutionManager(coordinator: _coordinator);
   int _selected = 0;
+  static const List<int> _drawerDestinationPages = <int>[0, 1, 2, 3, 6, 7, 8, 9];
   // ARAM_NEXUS_SOURCE_UPDATE_20261116: retain stateful pages during navigation.
   final Map<int, Widget> _pageCache = <int, Widget>{};
 
@@ -157,28 +158,62 @@ class _AppShellState extends State<AppShell> {
   Widget _buildDock() => SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 5, 18, 8),
-          child: NexusGlassPanel(
-            padding: const EdgeInsets.all(5),
-            radius: 30,
-            blur: 22,
-            tint: const Color(0xE6060A14),
-            borderColor: const Color(0x30FFFFFF),
-            child: Row(children: [
-              _DockItem(icon: Icons.hub_outlined, selectedIcon: Icons.hub_rounded, label: 'المقر', selected: _selected == 0, onTap: () => setState(() => _selected = 0)),
-              _DockItem(icon: Icons.auto_awesome_outlined, selectedIcon: Icons.auto_awesome, label: 'المساعد', selected: _selected == 1, onTap: _openAssistant),
-              _DockItem(icon: Icons.folder_open_outlined, selectedIcon: Icons.folder_rounded, label: 'المشاريع', selected: _selected == 2, onTap: () => setState(() => _selected = 2)),
-              _DockItem(icon: Icons.space_dashboard_outlined, selectedIcon: Icons.space_dashboard_rounded, label: 'التحكم', selected: _selected == 3, onTap: () => setState(() => _selected = 3)),
-            ]),
+          padding: const EdgeInsets.fromLTRB(14, 4, 14, 7),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              NexusGlassPanel(
+                padding: const EdgeInsets.all(5),
+                radius: 28,
+                blur: 22,
+                tint: const Color(0xE6060A14),
+                borderColor: const Color(0x30FFFFFF),
+                child: Row(
+                  children: <Widget>[
+                    _DockItem(icon: Icons.hub_outlined, selectedIcon: Icons.hub_rounded, label: 'المقر', selected: _selected == 0, onTap: () => setState(() => _selected = 0)),
+                    _DockItem(icon: Icons.auto_awesome_outlined, selectedIcon: Icons.auto_awesome, label: 'المساعد', selected: _selected == 1, onTap: _openAssistant),
+                    _DockItem(icon: Icons.folder_open_outlined, selectedIcon: Icons.folder_rounded, label: 'المشاريع', selected: _selected == 2, onTap: () => setState(() => _selected = 2)),
+                    _DockItem(icon: Icons.space_dashboard_outlined, selectedIcon: Icons.space_dashboard_rounded, label: 'التحكم', selected: _selected == 3, onTap: () => setState(() => _selected = 3)),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 7),
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: _SystemShortcut(
+                      icon: Icons.terminal_rounded,
+                      label: 'Linux / Ubuntu',
+                      subtitle: 'بيئة التنفيذ والطرفية',
+                      selected: _selected == 4,
+                      onTap: () => setState(() => _selected = 4),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _SystemShortcut(
+                      icon: Icons.code_rounded,
+                      label: 'GitHub',
+                      subtitle: 'المستودعات وعمليات البناء',
+                      selected: _selected == 5,
+                      onTap: () => setState(() => _selected = 5),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
         ),
       );
 
   Widget _buildDrawer() => NavigationDrawer(
-        selectedIndex: _selected,
+        selectedIndex: _drawerDestinationPages.contains(_selected)
+            ? _drawerDestinationPages.indexOf(_selected)
+            : null,
         onDestinationSelected: (value) {
+          if (value < 0 || value >= _drawerDestinationPages.length) return;
           Navigator.pop(context);
-          setState(() => _selected = value);
+          setState(() => _selected = _drawerDestinationPages[value]);
         },
         children: [
           Padding(
@@ -200,9 +235,7 @@ class _AppShellState extends State<AppShell> {
           const NavigationDrawerDestination(icon: Icon(Icons.auto_awesome_outlined), selectedIcon: Icon(Icons.auto_awesome), label: Text('المساعد الذكي')),
           const NavigationDrawerDestination(icon: Icon(Icons.folder_open_outlined), selectedIcon: Icon(Icons.folder_rounded), label: Text('مركز المشاريع')),
           const NavigationDrawerDestination(icon: Icon(Icons.space_dashboard_outlined), selectedIcon: Icon(Icons.space_dashboard_rounded), label: Text('مركز التحكم')),
-          const Padding(padding: EdgeInsetsDirectional.fromSTEB(25, 15, 25, 8), child: Text('TOOLS & SYSTEM', style: TextStyle(color: NexusPalette.subtle, fontSize: 9, letterSpacing: 1.6, fontWeight: FontWeight.w900))),
-          const NavigationDrawerDestination(icon: Icon(Icons.terminal_rounded), selectedIcon: Icon(Icons.terminal_rounded), label: Text('طرفية Android / PTY')),
-          const NavigationDrawerDestination(icon: Icon(Icons.code_rounded), selectedIcon: Icon(Icons.code_rounded), label: Text('GitHub Workspace')),
+          const Padding(padding: EdgeInsetsDirectional.fromSTEB(25, 15, 25, 8), child: Text('TEAM & SYSTEM', style: TextStyle(color: NexusPalette.subtle, fontSize: 9, letterSpacing: 1.6, fontWeight: FontWeight.w900))),
           const NavigationDrawerDestination(icon: Icon(Icons.groups_2_outlined), selectedIcon: Icon(Icons.groups_2_rounded), label: Text('فريق الوكلاء والذاكرة')),
           const NavigationDrawerDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings_rounded), label: Text('الإعدادات')),
           const NavigationDrawerDestination(icon: Icon(Icons.memory_outlined), selectedIcon: Icon(Icons.memory_rounded), label: Text('محرك Aram AI')),
@@ -240,6 +273,60 @@ class _AppShellState extends State<AppShell> {
           ),
         ),
         bottomNavigationBar: _selected == 1 ? null : _buildDock(),
+      );
+}
+
+class _SystemShortcut extends StatelessWidget {
+  const _SystemShortcut({
+    required this.icon,
+    required this.label,
+    required this.subtitle,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final String subtitle;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(15),
+          onTap: onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
+            decoration: BoxDecoration(
+              color: selected ? NexusPalette.primary.withValues(alpha: 0.13) : const Color(0xD90A101B),
+              borderRadius: BorderRadius.circular(15),
+              border: Border.all(
+                color: selected ? NexusPalette.primary.withValues(alpha: 0.62) : Colors.white.withValues(alpha: 0.09),
+              ),
+            ),
+            child: Row(
+              children: <Widget>[
+                Icon(icon, size: 19, color: selected ? NexusPalette.primaryLight : NexusPalette.muted),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: selected ? NexusPalette.primaryLight : NexusPalette.text, fontSize: 10, fontWeight: FontWeight.w900)),
+                      const SizedBox(height: 2),
+                      Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: NexusPalette.muted, fontSize: 8)),
+                    ],
+                  ),
+                ),
+                if (selected) const Icon(Icons.circle, size: 6, color: NexusPalette.primary),
+              ],
+            ),
+          ),
+        ),
       );
 }
 

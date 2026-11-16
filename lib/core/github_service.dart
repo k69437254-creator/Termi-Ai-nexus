@@ -16,21 +16,21 @@ class GitHubService {
   }
 
   Future<Map<String, dynamic>> authenticatedUser() async {
-    final response = await _client.get(Uri.parse('$_api/user'), headers: await _headers());
+    final response = await _client.get(Uri.parse('$_api/user'), headers: await _headers()).timeout(const Duration(seconds: 35));
     final data = _decode(response);
     if (data is! Map<String, dynamic>) throw const FormatException('Unexpected GitHub user response');
     return data;
   }
 
   Future<List<Map<String, dynamic>>> repositories({int page = 1}) async {
-    final response = await _client.get(Uri.parse('$_api/user/repos?sort=updated&per_page=50&page=$page'), headers: await _headers());
+    final response = await _client.get(Uri.parse('$_api/user/repos?sort=updated&per_page=50&page=$page'), headers: await _headers()).timeout(const Duration(seconds: 35));
     final data = _decode(response);
     if (data is! List) throw const FormatException('Unexpected repositories response');
     return data.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
   }
 
   Future<Map<String, dynamic>> createRepository({required String name, String description = '', bool isPrivate = true}) async {
-    final response = await _client.post(Uri.parse('$_api/user/repos'), headers: await _headers(), body: jsonEncode({'name': name, 'description': description, 'private': isPrivate, 'auto_init': true}));
+    final response = await _client.post(Uri.parse('$_api/user/repos'), headers: await _headers(), body: jsonEncode({'name': name, 'description': description, 'private': isPrivate, 'auto_init': true})).timeout(const Duration(seconds: 35));
     final data = _decode(response);
     if (data is! Map<String, dynamic>) throw const FormatException('Unexpected create repository response');
     return data;
@@ -45,14 +45,14 @@ class GitHubService {
   }
 
   Future<Map<String, dynamic>> createIssue({required String owner, required String repo, required String title, required String body}) async {
-    final response = await _client.post(_repositoryEndpoint(owner, repo, 'issues'), headers: await _headers(), body: jsonEncode({'title': title, 'body': body}));
+    final response = await _client.post(_repositoryEndpoint(owner, repo, 'issues'), headers: await _headers(), body: jsonEncode({'title': title, 'body': body})).timeout(const Duration(seconds: 35));
     final data = _decode(response);
     if (data is! Map<String, dynamic>) throw const FormatException('Unexpected issue response');
     return data;
   }
 
   Future<Map<String, dynamic>> createPullRequest({required String owner, required String repo, required String title, required String head, required String base, String body = ''}) async {
-    final response = await _client.post(_repositoryEndpoint(owner, repo, 'pulls'), headers: await _headers(), body: jsonEncode({'title': title, 'head': head, 'base': base, 'body': body}));
+    final response = await _client.post(_repositoryEndpoint(owner, repo, 'pulls'), headers: await _headers(), body: jsonEncode({'title': title, 'head': head, 'base': base, 'body': body})).timeout(const Duration(seconds: 35));
     final data = _decode(response);
     if (data is! Map<String, dynamic>) throw const FormatException('Unexpected pull request response');
     return data;
@@ -71,7 +71,7 @@ class GitHubService {
       'branch': branch,
       'per_page': '20',
     });
-    final response = await _client.get(uri, headers: await _headers());
+    final response = await _client.get(uri, headers: await _headers()).timeout(const Duration(seconds: 35));
     final data = _decode(response);
     if (data is! Map || data['workflow_runs'] is! List) {
       throw const FormatException('Unexpected GitHub workflow-runs response.');
@@ -102,7 +102,7 @@ class GitHubService {
       uri,
       headers: await _headers(),
       body: jsonEncode({'ref': ref}),
-    );
+    ).timeout(const Duration(seconds: 35));
     if (response.statusCode != 204) {
       _decode(response);
       throw Exception('GitHub workflow dispatch failed (${response.statusCode}).');

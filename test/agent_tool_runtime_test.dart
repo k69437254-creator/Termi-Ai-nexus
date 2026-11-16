@@ -20,6 +20,52 @@ void main() {
     if (await root.exists()) await root.delete(recursive: true);
   });
 
+  test('inspect_project is reachable and validates a Flutter Android workspace', () async {
+    await File('${root.path}/pubspec.yaml').writeAsString('name: demo\n');
+    await Directory('${root.path}/lib').create();
+    await File('${root.path}/lib/main.dart').writeAsString('void main() {}\n');
+    await Directory('${root.path}/android/app').create(recursive: true);
+    await Directory('${root.path}/android/gradle/wrapper').create(recursive: true);
+    await File('${root.path}/android/settings.gradle.kts').writeAsString('');
+    await File('${root.path}/android/app/build.gradle.kts').writeAsString('');
+    await File('${root.path}/android/gradlew').writeAsString('#!/bin/sh\n');
+    await File('${root.path}/android/gradle/wrapper/gradle-wrapper.jar').writeAsBytes([1]);
+    await File('${root.path}/android/gradle/wrapper/gradle-wrapper.properties').writeAsString('');
+
+    final result = await runtime.execute('inspect_project', {});
+
+    expect(result['ok'], isTrue);
+    expect(result['projectType'], 'flutter');
+    expect(runtime.lastToolName, 'inspect_project');
+    expect(runtime.hasSuccessfulValidation, isTrue);
+    expect(runtime.stagedPaths, isEmpty);
+  });
+
+  test('inspect_project rejects nested sensitive paths and embedded GitHub tokens', () async {
+    await File('${root.path}/pubspec.yaml').writeAsString('name: demo\n');
+    await Directory('${root.path}/lib').create();
+    await File('${root.path}/lib/main.dart').writeAsString('void main() {}\n');
+    await Directory('${root.path}/android/app').create(recursive: true);
+    await Directory('${root.path}/android/gradle/wrapper').create(recursive: true);
+    await File('${root.path}/android/settings.gradle.kts').writeAsString('');
+    await File('${root.path}/android/app/build.gradle.kts').writeAsString('');
+    await File('${root.path}/android/gradlew').writeAsString('#!/bin/sh\n');
+    await File('${root.path}/android/gradle/wrapper/gradle-wrapper.jar').writeAsBytes([1]);
+    await File('${root.path}/android/gradle/wrapper/gradle-wrapper.properties').writeAsString('');
+    await Directory('${root.path}/secrets').create();
+    await File('${root.path}/secrets/config.txt').writeAsString('ordinary file');
+
+    final nestedSecret = await runtime.execute('inspect_project', {});
+    expect(nestedSecret['ok'], isFalse);
+
+    await Directory('${root.path}/secrets').delete(recursive: true);
+    await File('${root.path}/lib/config.dart').writeAsString(
+      "const token = 'ghp_abcdefghijklmnopqrstuvwxyz1234567890';\n",
+    );
+    final embeddedSecret = await runtime.execute('inspect_project', {});
+    expect(embeddedSecret['ok'], isFalse);
+  });
+
   test('reads a real workspace file', () async {
     await File('${root.path}/README.md').writeAsString('real content');
     final result = await runtime.execute('read_file', {'path': 'README.md'});
