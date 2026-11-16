@@ -417,7 +417,9 @@ class ProjectExecutionManager {
     if (project.tasks.isEmpty) return false;
     const terminalDeploymentStates = {'succeeded', 'failed', 'skipped', 'not_required'};
     if (project.deploymentStatus != null &&
-        !terminalDeploymentStates.contains(project.deploymentStatus)) return false;
+        !terminalDeploymentStates.contains(project.deploymentStatus)) {
+      return false;
+    }
 
     return project.tasks.every(
       (task) =>

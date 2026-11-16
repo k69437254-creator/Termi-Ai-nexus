@@ -340,7 +340,7 @@ class ProjectCoordinator {
             success = true;
             final finishedNow = project.tasks.where((item) => item.status == TaskStatus.completed).length;
             project.deploymentProgress = project.githubRepository == null ? project.deploymentProgress : (10 + (finishedNow / project.tasks.length) * 60).clamp(10, 70).toDouble();
-            project.deploymentMessage = project.githubRepository == null ? project.deploymentMessage : 'اكتملت ${task.title}؛ ${finishedNow} من ${project.tasks.length} مهام.';
+            project.deploymentMessage = project.githubRepository == null ? project.deploymentMessage : 'اكتملت ${task.title}؛ $finishedNow من ${project.tasks.length} مهام.';
             project.executionLog.add('${DateTime.now().toIso8601String()} • اكتملت ${task.title}؛ تغييرات الملفات: ${changedPaths.length}.');
             if (project.executionLog.length > 120) project.executionLog.removeRange(0, project.executionLog.length - 120);
             await save(project);

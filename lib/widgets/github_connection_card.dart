@@ -1,6 +1,6 @@
 // TERMAI_GITHUB_AUTOMATION_UPDATE_20261116_V1
 import 'dart:convert';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:http/http.dart' as http;
 import '../core/secure_vault.dart';
 import '../core/nexus_theme.dart';
@@ -92,11 +92,13 @@ class _GitHubConnectionCardState extends State<GitHubConnectionCard> {
     setState(() => _busy = true);
     try {
       await _vault.write('github.token', '');
-      if (mounted) setState(() {
-        _connected = false;
-        _account = '';
-        _message = 'فُصل حساب GitHub من هذا الجهاز.';
-      });
+      if (mounted) {
+        setState(() {
+          _connected = false;
+          _account = '';
+          _message = 'فُصل حساب GitHub من هذا الجهاز.';
+        });
+      }
     } catch (error) {
       if (mounted) setState(() => _message = 'تعذر فصل الحساب: $error');
     } finally {
