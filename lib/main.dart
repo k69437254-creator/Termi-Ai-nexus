@@ -4,7 +4,7 @@ import 'dart:ui' show DartPluginRegistrant;
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
-import 'app_shell.dart';
+import 'screens/startup_gate_screen.dart';
 import 'core/nexus_theme.dart';
 import 'core/project_coordinator.dart';
 import 'models/domain.dart';
@@ -199,6 +199,6 @@ class TermiAiNexusApp extends StatelessWidget {
           textDirection: TextDirection.rtl,
           child: child ?? const SizedBox.shrink(),
         ),
-        home: const AppShell(),
+        home: const StartupGateScreen(),
       );
 }

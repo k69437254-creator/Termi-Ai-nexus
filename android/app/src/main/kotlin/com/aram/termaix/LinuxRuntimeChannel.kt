@@ -34,8 +34,33 @@ object LinuxRuntimeChannel {
     private const val MAX_ARCHIVE_BYTES = 128L * 1024L * 1024L
     private const val MIN_FREE_BYTES = 1200L * 1024L * 1024L
     private const val OUTPUT_LIMIT = 96 * 1024
+    // ARAM_NEXUS_SOURCE_UPDATE_20261116: persisted progress snapshot and replay for Linux installation.
     private val installing = AtomicBoolean(false)
     @Volatile private var installEventSink: EventChannel.EventSink? = null
+    @Volatile private var installAppContext: Context? = null
+    @Volatile private var lastPersistedAt = 0L
+    @Volatile private var lastInstallEvent: Map<String, Any?> = mapOf(
+        "stage" to "idle", "message" to "لم تبدأ عملية تهيئة Ubuntu بعد.", "active" to false
+    )
+
+    private fun persistInstallEvent(snapshot: Map<String, Any?>, force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastPersistedAt < 1000L) return
+        lastPersistedAt = now
+        val context = installAppContext ?: return
+        val downloaded = snapshot["downloadedBytes"] as? Long ?: -1L
+        val total = snapshot["totalBytes"] as? Long ?: -1L
+        val percent = snapshot["percent"] as? Double ?: -1.0
+        context.getSharedPreferences("termai_linux_install_state", Context.MODE_PRIVATE).edit()
+            .putString("stage", snapshot["stage"]?.toString() ?: "idle")
+            .putString("message", snapshot["message"]?.toString() ?: "")
+            .putLong("downloadedBytes", downloaded)
+            .putLong("totalBytes", total)
+            .putFloat("percent", percent.toFloat())
+            .putBoolean("active", snapshot["active"] == true)
+            .putLong("updatedAt", now)
+            .apply()
+    }
 
     private fun emitInstallProgress(
         handler: Handler,
@@ -47,21 +72,18 @@ object LinuxRuntimeChannel {
         val percent = if (downloadedBytes != null && totalBytes != null && totalBytes > 0L) {
             downloadedBytes.toDouble() * 100.0 / totalBytes.toDouble()
         } else null
-
-        handler.post {
-            installEventSink?.success(
-                mapOf<String, Any?>(
-                    "stage" to stage,
-                    "message" to message,
-                    "downloadedBytes" to downloadedBytes,
-                    "totalBytes" to totalBytes,
-                    "remainingBytes" to if (downloadedBytes != null && totalBytes != null)
-                        (totalBytes - downloadedBytes).coerceAtLeast(0L) else null,
-                    "percent" to percent
-                )
-            )
-        }
+        val snapshot = mapOf<String, Any?>(
+            "stage" to stage, "message" to message,
+            "downloadedBytes" to downloadedBytes, "totalBytes" to totalBytes,
+            "remainingBytes" to if (downloadedBytes != null && totalBytes != null)
+                (totalBytes - downloadedBytes).coerceAtLeast(0L) else null,
+            "percent" to percent, "active" to installing.get()
+        )
+        lastInstallEvent = snapshot
+        persistInstallEvent(snapshot, force = stage == "complete" || stage == "error")
+        handler.post { installEventSink?.success(snapshot) }
     }
+
     private val agentCommands = setOf(
         "pwd", "ls", "find", "grep", "rg", "cat", "sed", "awk", "wc",
         "head", "tail", "stat", "git", "gh", "python3", "python", "pip3",
@@ -75,12 +97,31 @@ object LinuxRuntimeChannel {
     fun register(engine: FlutterEngine, context: Context) {
         val app = context.applicationContext
 
+        installAppContext = app
+        val savedState = app.getSharedPreferences("termai_linux_install_state", Context.MODE_PRIVATE)
+        val savedWasActive = savedState.getBoolean("active", false)
+        if (savedState.contains("stage")) {
+            val restoredStage = if (savedWasActive) "interrupted" else savedState.getString("stage", "idle") ?: "idle"
+            val restoredMessage = if (savedWasActive) "انقطعت عملية التهيئة السابقة عند آخر نقطة محفوظة؛ أعد بدء التهيئة لفحص الموارد وإكمالها." else savedState.getString("message", "") ?: ""
+            lastInstallEvent = mapOf(
+                "stage" to restoredStage, "message" to restoredMessage,
+                "downloadedBytes" to savedState.getLong("downloadedBytes", -1L).takeIf { it >= 0L },
+                "totalBytes" to savedState.getLong("totalBytes", -1L).takeIf { it >= 0L },
+                "percent" to savedState.getFloat("percent", -1f).takeIf { it >= 0f }?.toDouble(),
+                "active" to false
+            )
+            if (savedWasActive) persistInstallEvent(lastInstallEvent, force = true)
+        }
         EventChannel(
             engine.dartExecutor.binaryMessenger,
             "termai/linux/install-events"
         ).setStreamHandler(object : EventChannel.StreamHandler {
             override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
                 installEventSink = events
+                val snapshot = lastInstallEvent + ("active" to installing.get())
+                Handler(Looper.getMainLooper()).post {
+                    if (installEventSink === events) events.success(snapshot)
+                }
             }
 
             override fun onCancel(arguments: Any?) {
@@ -119,6 +160,9 @@ object LinuxRuntimeChannel {
                         }
                     }
                 }
+                "installStatus" -> result.success(lastInstallEvent + mapOf(
+                    "active" to installing.get(), "installed" to isInstalled(app)
+                ))
                 "isInstalled" -> result.success(isInstalled(app))
                 "install" -> {
                     if (!installing.compareAndSet(false, true)) {
@@ -126,6 +170,7 @@ object LinuxRuntimeChannel {
                         return@setMethodCallHandler
                     }
                     val mainHandler = Handler(Looper.getMainLooper())
+                    emitInstallProgress(mainHandler, "prepare", "بدأت عملية تهيئة Ubuntu…")
                     thread(name = "termai-linux-install", isDaemon = true) {
                         try {
                             val details = install(app) { stage, message, downloaded, total ->
@@ -143,6 +188,10 @@ object LinuxRuntimeChannel {
                             }
                         } finally {
                             installing.set(false)
+                            val snapshot = lastInstallEvent + ("active" to false)
+                            lastInstallEvent = snapshot
+                            persistInstallEvent(snapshot, force = true)
+                            mainHandler.post { installEventSink?.success(snapshot) }
                         }
                     }
                 }
@@ -158,6 +207,11 @@ object LinuxRuntimeChannel {
             File(root, "bin/bash").exists() &&
             File(root, "usr/bin/git").exists() &&
             File(root, "usr/bin/gh").exists() &&
+            File(root, "usr/bin/python3").exists() &&
+            File(root, "usr/bin/gcc").exists() &&
+            File(root, "usr/bin/make").exists() &&
+            File(root, "usr/bin/curl").exists() &&
+            File(root, "usr/bin/ssh").exists() &&
             runtimeBinariesPresent(context)
     }
 
@@ -257,18 +311,32 @@ object LinuxRuntimeChannel {
                 timeoutMs = 30_000L
             )
             requireSuccess("اختبار تشغيل Bash داخل PRoot قبل تثبيت الحزم", bashProbe)
-            val installPackages = "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git gh ca-certificates curl openssh-client python3 build-essential && apt-get clean && rm -rf /var/lib/apt/lists/*"
-            progress("packages", "جارٍ تثبيت Git وGitHub CLI وأدوات Linux…", null, null)
+            progress("packages_index", "جارٍ تحديث فهارس حزم Ubuntu…", null, null)
+            val aptUpdate = runProot(context, target, emptyList(), "/root",
+                listOf("apt-get", "update"), timeoutMs = 18 * 60 * 1000L)
+            requireSuccess("تحديث فهارس حزم Ubuntu", aptUpdate)
 
-            val apt = runProot(
-                context = context,
-                root = target,
-                extraBinds = emptyList(),
-                workingDirectory = "/root",
-                command = listOf("/bin/bash", "-lc", installPackages),
-                timeoutMs = 18 * 60 * 1000L
+            val packageGroups = listOf(
+                Triple("packages_git", "تثبيت Git وGitHub CLI…", listOf("git", "gh")),
+                Triple("packages_python", "تثبيت Python وأدواته…", listOf("python3", "python3-pip")),
+                Triple("packages_build", "تثبيت GCC وG++ وMake وأدوات البناء…", listOf("build-essential")),
+                Triple("packages_network", "تثبيت شهادات TLS وCurl وOpenSSH…", listOf("ca-certificates", "curl", "openssh-client"))
             )
-            requireSuccess("تثبيت Git وGitHub CLI وأدوات Linux", apt)
+            val packageOutputs = StringBuilder()
+            for ((stage, message, packages) in packageGroups) {
+                progress(stage, message, null, null)
+                val packageCommand = "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${packages.joinToString(" ")}"
+                val installed = runProot(context, target, emptyList(), "/root",
+                    listOf("/bin/bash", "-lc", packageCommand),
+                    timeoutMs = 18 * 60 * 1000L)
+                requireSuccess("$message", installed)
+                packageOutputs.append(installed.output).append('\n')
+            }
+            progress("packages_cleanup", "جارٍ تنظيف فهارس الحزم المؤقتة…", null, null)
+            val aptClean = runProot(context, target, emptyList(), "/root",
+                listOf("/bin/bash", "-lc", "apt-get clean && rm -rf /var/lib/apt/lists/*"),
+                timeoutMs = 120_000L)
+            requireSuccess("تنظيف حزم Ubuntu", aptClean)
 
             progress("final_verify", "جارٍ التحقق النهائي من Ubuntu والأدوات…", null, null)
 
@@ -279,13 +347,16 @@ object LinuxRuntimeChannel {
                 workingDirectory = "/root",
                 command = listOf(
                     "/bin/bash", "-lc",
-                    "set -e; test \"\$(id -u)\" = 0; . /etc/os-release; echo \"\$PRETTY_NAME\"; uname -m; git --version; gh --version | head -1; python3 --version"
+                    "set -e; test \"\$(id -u)\" = 0; . /etc/os-release; echo \"\$PRETTY_NAME\"; uname -m; git --version; gh --version | head -1; python3 --version; gcc --version | head -1; g++ --version | head -1; make --version | head -1; curl --version | head -1; ssh -V 2>&1 | head -1"
                 ),
                 timeoutMs = 90_000L
             )
             requireSuccess("التحقق من Ubuntu وGit وGitHub CLI", verify)
             check(File(target, "etc/os-release").isFile && File(target, "bin/bash").exists() &&
-                File(target, "usr/bin/git").exists() && File(target, "usr/bin/gh").exists()) {
+                File(target, "usr/bin/git").exists() && File(target, "usr/bin/gh").exists() &&
+                File(target, "usr/bin/python3").exists() && File(target, "usr/bin/gcc").exists() &&
+                File(target, "usr/bin/make").exists() && File(target, "usr/bin/curl").exists() &&
+                File(target, "usr/bin/ssh").exists()) {
                 "اكتمل أمر التثبيت لكن فشل فحص ملفات النظام الأساسية."
             }
             File(target, ".termai-ubuntu-installed").writeText("Ubuntu 24.04.5 LTS ARM64\n")
@@ -296,7 +367,7 @@ object LinuxRuntimeChannel {
             return mapOf(
                 "installed" to true,
                 "distribution" to "Ubuntu 24.04.5 LTS",
-                "output" to (extraction.output + "\\n" + apt.output.takeLast(OUTPUT_LIMIT) + "\\n" + verify.output)
+                "output" to (extraction.output + "\\n" + packageOutputs.toString().takeLast(OUTPUT_LIMIT) + "\\n" + verify.output)
             )
         } catch (error: Throwable) {
             // Remove only an unmarked, incomplete guest created by this installation attempt.

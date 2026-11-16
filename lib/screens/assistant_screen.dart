@@ -1,9 +1,11 @@
 import 'package:material_ui/material_ui.dart';
+import 'package:uuid/uuid.dart';
 
 import '../core/nexus_feature_suite.dart';
 import '../core/nexus_theme.dart';
 import '../core/project_coordinator.dart';
 import '../core/project_execution_manager.dart';
+import '../core/project_planning_job_store.dart';
 import '../models/domain.dart';
 import '../widgets/agent_avatar.dart';
 
@@ -35,6 +37,8 @@ class _AssistantScreenState extends State<AssistantScreen> {
   String? _executingProjectId;
   final Set<String> _executedProjects = {};
   bool _planning = false;
+  String _planningMessage = 'أراجع الطلب وأجهّز الخطة…';
+  final ProjectPlanningJobStore _planningJobs = ProjectPlanningJobStore();
   bool _executing = false;
   bool _cancellingExecution = false;
   bool _mediaBusy = false;
@@ -49,46 +53,69 @@ class _AssistantScreenState extends State<AssistantScreen> {
   Future<void> _restoreConversation() async {
     try {
       final saved = await widget.coordinator.memory.managerConversation();
-      if (!mounted || saved.isEmpty || _messages.length != 1) return;
-
       final projects = await widget.coordinator.listProjects();
       final byId = {for (final project in projects) project.id: project};
       final restored = <_ChatMessage>[];
       final restoredExecuted = <String>{};
-
       for (final item in saved) {
         final role = item['role']?.toString();
         final text = item['text']?.toString() ?? '';
         if (text.isEmpty || (role != 'user' && role != 'assistant')) continue;
-
         final projectId = item['projectId']?.toString();
         final project = projectId == null ? null : byId[projectId];
-        if (project != null &&
+        if (project != null && project.tasks.isNotEmpty &&
             project.tasks.any((task) => task.status != TaskStatus.pending) &&
             !project.tasks.any((task) => task.status == TaskStatus.running)) {
           restoredExecuted.add(project.id);
         }
-        restored.add(_ChatMessage(
-          isUser: role == 'user',
-          text: text,
-          project: project,
-          isError: item['isError'] == true,
-        ));
+        restored.add(_ChatMessage(isUser: role == 'user', text: text,
+            project: project, isError: item['isError'] == true));
       }
-
-      if (!mounted || restored.isEmpty || _messages.length != 1) return;
+      if (!mounted) return;
       setState(() {
-        _messages
-          ..clear()
-          ..addAll(restored);
-        _pendingProjectId = null;
+        if (restored.isNotEmpty) {
+          _messages..clear()..addAll(restored);
+        }
         _executedProjects.addAll(restoredExecuted);
       });
+
+      final job = await _planningJobs.load();
+      if (!mounted || job == null) return;
+      final existingProject = byId[job.projectId];
+      if (job.status == 'completed' && existingProject != null && existingProject.tasks.isNotEmpty) {
+        final waitingForApproval = existingProject.tasks.every(
+          (task) => task.status == TaskStatus.pending,
+        );
+        final hasPlanBubble = _messages.any(
+          (message) => message.project?.id == existingProject.id,
+        );
+        setState(() {
+          if (waitingForApproval) _pendingProjectId = existingProject.id;
+          if (!hasPlanBubble) {
+            _messages.add(_ChatMessage(isUser: false,
+              text: 'استُعيدت خطة المشروع المحفوظة بعد إعادة فتح التطبيق. راجعها قبل الموافقة على التنفيذ.',
+              project: existingProject));
+          }
+        });
+        if (!hasPlanBubble) await _persistConversation();
+      } else if (job.status == 'running') {
+        setState(() {
+          _planning = true;
+          _planningMessage = job.message.isEmpty ? 'جارٍ استعادة طلب التخطيط…' : job.message;
+        });
+        unawaited(_resumePlanningJob(job));
+      } else if (job.status == 'failed' && job.error.isNotEmpty &&
+          !_messages.any((message) => message.isError && message.text.contains(job.error))) {
+        setState(() => _messages.add(_ChatMessage(isUser: false,
+          text: 'تعذر استكمال طلب التخطيط السابق: ${job.error}', isError: true)));
+        await _persistConversation();
+      }
       _scrollToLatest();
     } catch (_) {
-      // Conversation recovery must not block the assistant.
+      // A transcript or job-store recovery failure must not block normal app use.
     }
   }
+
 
   Future<void> _persistConversation() async {
     try {
@@ -164,110 +191,188 @@ class _AssistantScreenState extends State<AssistantScreen> {
     }
   }
 
+  bool _looksLikeExplicitProjectRequest(String prompt) {
+    final value = prompt.toLowerCase();
+    const phrases = <String>[
+      'أنشئ تطبيق', 'انشئ تطبيق', 'إنشاء تطبيق', 'انشاء تطبيق', 'بناء تطبيق',
+      'اصنع تطبيق', 'اصنع لي تطبيق', 'ابن تطبيق', 'ابني تطبيق', 'ابني لي تطبيق',
+      'طوّر التطبيق', 'طور التطبيق', 'برمج تطبيق', 'صمم تطبيق', 'صمّم تطبيق',
+      'تصميم تطبيق', 'نفذ التطبيق', 'نفّذ التطبيق', 'اصلح التطبيق', 'أصلح التطبيق',
+      'إصلاح التطبيق', 'اصلاح التطبيق', 'أنشئ لي', 'انشئ لي', 'أنشئ مشروع',
+      'انشئ مشروع', 'إنشاء مشروع', 'انشاء مشروع', 'ابن مشروع', 'نفذ مشروع', 'نفّذ مشروع',
+      'build an app', 'create an app', 'develop an app', 'implement an app',
+      'build a project', 'create a project', 'fix the app', 'modify the app',
+      'implement this feature',
+    ];
+    return phrases.any(value.contains);
+  }
+
+  Future<void> _savePlanningJob(ProjectPlanningJob job) async {
+    await _planningJobs.save(job);
+    if (!mounted) return;
+    setState(() {
+      _planning = job.status == 'running';
+      _planningMessage = job.message;
+    });
+  }
+
+  Future<void> _showCompletedPlan(ProjectPlanningJob job, ProjectRecord project) async {
+    await _planningJobs.save(job.copyWith(stage: 'complete', status: 'completed',
+      message: 'تم حفظ الخطة؛ وهي بانتظار موافقتك قبل التنفيذ.', error: ''));
+    if (!mounted) return;
+    setState(() {
+      _planning = false;
+      _planningMessage = '';
+      _pendingProjectId = project.id;
+      if (!_messages.any((message) => message.project?.id == project.id)) {
+        _messages.add(_ChatMessage(isUser: false,
+          text: 'حللت طلبك وحوّلته إلى خطة من ${project.tasks.length} مهام. راجع توزيع العمل أدناه؛ لن يبدأ التنفيذ قبل موافقتك.',
+          project: project));
+      }
+    });
+    await _persistConversation();
+    _scrollToLatest();
+  }
+
+  Future<void> _createProjectFromJob(ProjectPlanningJob job, String request) async {
+    var current = job.copyWith(request: request, stage: 'workspace', status: 'running',
+      message: 'جارٍ تجهيز مساحة عمل المشروع…', error: '');
+    await _savePlanningJob(current);
+    final project = await widget.coordinator.prepare(request,
+      projectId: current.projectId,
+      onProgress: (stage, message) async {
+        current = current.copyWith(stage: stage, status: 'running', message: message);
+        await _savePlanningJob(current);
+      });
+    await _showCompletedPlan(current, project);
+  }
+
+  Future<void> _classifyAndContinue(ProjectPlanningJob job, String request, String history) async {
+    var current = job.copyWith(stage: 'understanding', status: 'running',
+      message: 'جارٍ فهم الطلب وتصنيفه بواسطة المدير الرئيسي…');
+    await _savePlanningJob(current);
+    if (_looksLikeExplicitProjectRequest(request)) {
+      await _createProjectFromJob(current, request);
+      return;
+    }
+    final raw = await widget.coordinator.gateway.chat(
+      agentId: 'manager', temperature: 0.2, localEngineOnly: true,
+      maxTokens: 512, requestId: current.id,
+      system: 'You are the main conversational director of TermiAI-Nexus. '
+        'Classify the latest user message using the conversation context. '
+        'Return one JSON object only. For normal conversation use '
+        '{"type":"chat","reply":"your answer"}. '
+        'For a request that clearly asks to create, modify, debug, or build '
+        'a software project use '
+        '{"type":"project","request":"a clear project request"}. '
+        'Do not classify questions, greetings, explanations, or casual '
+        'discussion as projects. Reply in the same language as the user. '
+        'Do not claim that any task has been executed.',
+      user: 'Conversation history:\n$history\nUSER: $request',
+    );
+    final result = widget.coordinator.gateway.parseManagerResponse(raw);
+    final type = result['type']?.toString();
+    final projectRequest = result['request']?.toString().trim() ?? '';
+    if (type == 'project' && projectRequest.isNotEmpty) {
+      await _createProjectFromJob(current, projectRequest);
+      return;
+    }
+    final reply = type == 'chat' ? result['reply']?.toString().trim() ?? '' : raw.trim();
+    if (reply.isEmpty) throw const FormatException('Empty manager reply');
+    await _planningJobs.clear();
+    if (!mounted) return;
+    setState(() {
+      _planning = false;
+      _planningMessage = '';
+      _messages.add(_ChatMessage(isUser: false, text: reply));
+    });
+    await _persistConversation();
+    _scrollToLatest();
+  }
+
+  Future<void> _resumePlanningJob(ProjectPlanningJob job) async {
+    try {
+      final history = _messages
+        .skip(_messages.length > 12 ? _messages.length - 12 : 0)
+        .map((message) => '${message.isUser ? "USER" : "ASSISTANT"}: ${message.text}')
+        .join('\n');
+      if (job.stage == 'planning' || job.stage == 'workspace' || job.stage == 'saving' || job.stage == 'complete') {
+        await _createProjectFromJob(job, job.request);
+      } else {
+        await _classifyAndContinue(job, job.request, history);
+      }
+    } catch (error) {
+      final failed = job.copyWith(status: 'failed', stage: 'failed',
+        message: 'تعذر استكمال طلب التخطيط.', error: error.toString());
+      await _planningJobs.save(failed);
+      if (mounted) {
+        setState(() {
+          _planning = false;
+          _planningMessage = '';
+          _messages.add(_ChatMessage(isUser: false,
+            text: 'تعذر إكمال إعداد خطة العمل: $error', isError: true));
+        });
+        await _persistConversation();
+      }
+    }
+  }
+
   Future<void> _submit() async {
     final selectedImage = _pendingImage;
     final typedPrompt = _request.text.trim();
     if ((typedPrompt.isEmpty && selectedImage == null) || _planning || _executing || _mediaBusy) return;
     final prompt = typedPrompt.isEmpty ? 'حلّل الصورة المرفقة وحدد ما الذي يظهر فيها.' : typedPrompt;
-
-    final previousMessages = _messages
-        .where((message) => message.text.trim().isNotEmpty)
-        .toList();
-
+    final previousMessages = _messages.where((message) => message.text.trim().isNotEmpty).toList();
     _request.clear();
     setState(() {
       _planning = true;
+      _planningMessage = 'جارٍ فهم الطلب…';
       _pendingImage = null;
       _pendingProjectId = null;
       _messages.add(_ChatMessage(isUser: true, text: selectedImage == null ? prompt : '$prompt\n[صورة مرفقة]'));
     });
-    _persistConversation();
+    await _persistConversation();
     _scrollToLatest();
 
+    final jobId = const Uuid().v4();
+    final projectId = const Uuid().v4();
+    var job = ProjectPlanningJob(id: jobId, projectId: projectId,
+      request: prompt, stage: 'understanding', status: 'running',
+      message: 'تم حفظ الطلب؛ جارٍ فهمه وتصنيفه…', updatedAt: DateTime.now().toIso8601String());
     try {
-      var requestForManager = prompt;
+      // Persist the request ID and original text before any slow model call.
+      await _planningJobs.save(job);
       if (selectedImage != null) {
         final imageDescription = await widget.coordinator.gateway.describeImage(
-          base64: selectedImage.base64,
-          mimeType: selectedImage.mimeType,
+          base64: selectedImage.base64, mimeType: selectedImage.mimeType,
           prompt: typedPrompt.isEmpty ? 'صف الصورة والعناصر والنصوص الظاهرة فيها.' : typedPrompt,
-          agentId: 'manager',
-        );
-        requestForManager += '\n\nتحليل الصورة المرفقة:\n$imageDescription';
+          agentId: 'manager');
+        job = job.copyWith(request: '$prompt\n\nتحليل الصورة المرفقة:\n$imageDescription');
+        await _planningJobs.save(job);
       }
       final history = previousMessages
-          .skip(previousMessages.length > 12 ? previousMessages.length - 12 : 0)
-          .map((message) =>
-              '${message.isUser ? "USER" : "ASSISTANT"}: ${message.text}')
-          .join('\n');
-
-      final raw = await widget.coordinator.gateway.chat(
-        agentId: 'manager',
-        temperature: 0.2,
-        localEngineOnly: true,
-        system: 'You are the main conversational director of TermiAI-Nexus. '
-            'Classify the latest user message using the conversation context. '
-            'Return one JSON object only. For normal conversation use '
-            '{"type":"chat","reply":"your answer"}. '
-            'For a request that clearly asks to create, modify, debug, or build '
-            'a software project use '
-            '{"type":"project","request":"a clear project request"}. '
-            'Do not classify questions, greetings, explanations, or casual '
-            'discussion as projects. Reply in the same language as the user. '
-            'Do not claim that any task has been executed.',
-        user: 'Conversation history:\n$history\nUSER: $requestForManager',
-      );
-
-      final result =
-          widget.coordinator.gateway.parseManagerResponse(raw);
-
-      final type = result['type']?.toString();
-      final projectRequest = result['request']?.toString().trim() ?? '';
-
-      if (type == 'project' && projectRequest.isNotEmpty) {
-        final project = await widget.coordinator.prepare(projectRequest);
-        if (!mounted) return;
-
-        setState(() {
-          _pendingProjectId = project.id;
-          _messages.add(_ChatMessage(
-            isUser: false,
-            text: 'حللت طلبك وحوّلته إلى خطة من ${project.tasks.length} مهام. راجع توزيع العمل أدناه؛ لن يبدأ التنفيذ قبل موافقتك.',
-            project: project,
-          ));
-        });
-        _persistConversation();
-      } else {
-        final reply = type == 'chat'
-            ? result['reply']?.toString().trim() ?? ''
-            : raw.trim();
-
-        if (reply.isEmpty) {
-          throw const FormatException('Empty chat reply');
-        }
-
-        if (!mounted) return;
-        setState(() {
-          _messages.add(_ChatMessage(isUser: false, text: reply));
-        });
-        _persistConversation();
-      }
+        .skip(previousMessages.length > 12 ? previousMessages.length - 12 : 0)
+        .map((message) => '${message.isUser ? "USER" : "ASSISTANT"}: ${message.text}')
+        .join('\n');
+      await _classifyAndContinue(job, job.request, history);
     } catch (error) {
+      final failed = ProjectPlanningJob(id: jobId, projectId: projectId,
+        request: prompt, stage: 'failed', status: 'failed',
+        message: 'تعذر إكمال طلب التخطيط.', error: error.toString(),
+        updatedAt: DateTime.now().toIso8601String());
+      await _planningJobs.save(failed);
       if (mounted) {
         setState(() {
-          _messages.add(_ChatMessage(
-            isUser: false,
-            text: 'تعذر فهم الاستجابة أو إكمال الطلب: $error',
-            isError: true,
-          ));
+          _planning = false;
+          _planningMessage = '';
+          _messages.add(_ChatMessage(isUser: false,
+            text: 'تعذر فهم الاستجابة أو إكمال الطلب: $error', isError: true));
         });
-        _persistConversation();
+        await _persistConversation();
       }
-    } finally {
-      if (mounted) setState(() => _planning = false);
-      _scrollToLatest();
     }
   }
+
 
   Future<void> _execute(ProjectRecord project) async {
     if (_executing || _pendingProjectId != project.id) return;
@@ -412,7 +517,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
                   onCancel: _executing && message.project?.id == _executingProjectId ? _cancelExecution : null,
                       );
                     }
-                    return _TypingBubble(executing: _executing);
+                    return _TypingBubble(executing: _executing, message: _planningMessage);
                   },
                 ),
               ],
@@ -736,8 +841,9 @@ class _TaskLine extends StatelessWidget {
 }
 
 class _TypingBubble extends StatelessWidget {
-  const _TypingBubble({required this.executing});
+  const _TypingBubble({required this.executing, required this.message});
   final bool executing;
+  final String message;
 
   @override
   Widget build(BuildContext context) => Align(
@@ -750,7 +856,7 @@ class _TypingBubble extends StatelessWidget {
             child: Row(mainAxisSize: MainAxisSize.min, children: [
               const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2)),
               const SizedBox(width: 9),
-              Text(executing ? 'يتابع الفريق تنفيذ المهام…' : 'أراجع الطلب وأجهّز الخطة…', style: const TextStyle(color: NexusPalette.muted, fontSize: 11)),
+              Text(executing ? 'يتابع الفريق تنفيذ المهام…' : (message.isEmpty ? 'أراجع الطلب وأجهّز الخطة…' : message), style: const TextStyle(color: NexusPalette.muted, fontSize: 11)),
             ]),
           ),
         ),

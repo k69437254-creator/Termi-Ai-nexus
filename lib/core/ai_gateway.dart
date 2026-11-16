@@ -226,7 +226,7 @@ class AiGateway {
     }
   }
 
-  Future<List<PlanTask>> createPlan(String request, String projectId, MemoryStore memory) async {
+  Future<List<PlanTask>> createPlan(String request, String projectId, MemoryStore memory, {String? requestId}) async {
     final teamMemory = await memory.contextFor(agentId: 'manager', projectId: projectId);
     const system = '''أنت المدير الرئيسي في TermiAI-Nexus.
 حوّل طلب المستخدم إلى خطة تنفيذ عملية ومتسلسلة من 3 إلى 8 مهام. أعد JSON فقط بالشكل {"tasks":[{"id":"t1","title":"...","description":"...","agentId":"architect|developer|qa|security","risk":"low|medium|high"}]}.
@@ -236,6 +236,7 @@ class AiGateway {
       temperature: 0.1,
       localEngineOnly: true,
       maxTokens: 1536,
+      requestId: requestId == null ? null : '$requestId-plan-1',
       system: '$system\nسياق الفريق:\n$teamMemory',
       user: request,
     );
@@ -247,6 +248,7 @@ class AiGateway {
         temperature: 0.05,
         localEngineOnly: true,
         maxTokens: 1536,
+        requestId: requestId == null ? null : '$requestId-plan-2',
         system: '$system\nالاستجابة السابقة رُفضت بسبب: ${firstError.message}. أعد بناء JSON صحيحاً ومكتملاً، ولا تكرر الخطأ.',
         user: 'طلب المستخدم:\n$request\n\nالاستجابة السابقة التي تحتاج إلى تصحيح:\n${_trim(firstResponse, 1800)}',
       );

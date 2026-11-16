@@ -32,23 +32,74 @@ class ProjectCoordinator {
 
   Future<void> _saveProjects(List<ProjectRecord> records) => jobStore.saveProjects(records);
 
-  Future<ProjectRecord> prepare(String request) async {
-    final id = const Uuid().v4();
+  // ARAM_NEXUS_SOURCE_UPDATE_20261116: idempotent plan creation with persisted draft reservation.
+  Future<ProjectRecord> prepare(
+    String request, {
+    String? projectId,
+    Future<void> Function(String stage, String message)? onProgress,
+  }) async {
+    final id = projectId?.trim().isNotEmpty == true
+        ? projectId!.trim()
+        : const Uuid().v4();
+    final all = await listProjects();
+    final existingIndex = all.indexWhere((item) => item.id == id);
+    if (existingIndex >= 0) {
+      final existing = all[existingIndex];
+      if (existing.request != request) {
+        throw StateError('معرف طلب التخطيط مرتبط بطلب مختلف؛ أوقف الاستعادة لمنع تكرار المشروع.');
+      }
+      if (existing.tasks.isNotEmpty) return existing;
+    }
+
+    await onProgress?.call('workspace', 'جارٍ حفظ طلب التخطيط وتجهيز مساحة العمل…');
     final docs = await getApplicationDocumentsDirectory();
-    final slug = request.toLowerCase().replaceAll(RegExp(r'[^a-z0-9\u0600-\u06ff]+'), '-').replaceAll(RegExp(r'^-+|-+$'), '');
-    final name = slug.isEmpty ? 'project-${id.substring(0, 8)}' : slug.substring(0, slug.length > 32 ? 32 : slug.length);
-    final workspacePath = p.join(docs.path, 'TermiAI-Nexus', 'workspaces', '${name}_${id.substring(0, 8)}');
+    final slug = request.toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9\u0600-\u06ff]+'), '-')
+        .replaceAll(RegExp(r'^-+|-+$'), '');
+    final name = slug.isEmpty ? 'project-${id.substring(0, 8)}'
+        : slug.substring(0, slug.length > 32 ? 32 : slug.length);
+    final workspacePath = existingIndex >= 0
+        ? all[existingIndex].workspacePath
+        : p.join(docs.path, 'TermiAI-Nexus', 'workspaces', '${name}_${id.substring(0, 8)}');
+    final draft = ProjectRecord(
+      id: id, name: name, request: request, workspacePath: workspacePath,
+      createdAt: existingIndex >= 0 ? all[existingIndex].createdAt : DateTime.now(),
+      tasks: const <PlanTask>[],
+    );
+    if (existingIndex < 0) {
+      all.insert(0, draft);
+    } else {
+      all[existingIndex] = draft;
+    }
+    await _saveProjects(all);
+
     final workspace = ProjectWorkspace(workspacePath);
     await workspace.initialize();
-    final tasks = await gateway.createPlan(request, id, memory);
-    final record = ProjectRecord(id: id, name: name, request: request, workspacePath: workspacePath, createdAt: DateTime.now(), tasks: tasks);
-    final all = await listProjects();
-    all.insert(0, record);
-    await _saveProjects(all);
-    await memory.addTeam('تم إنشاء مشروع $name وجرى إعداد خطة من ${tasks.length} مهام.');
-    await memory.addProject(id, 'طلب المستخدم: $request');
+    await onProgress?.call('planning', 'تم تجهيز مساحة العمل؛ يجري الآن توليد خطة المهام من محرك Aram AI…');
+    final tasks = await gateway.createPlan(request, id, memory, requestId: id);
+    await onProgress?.call('saving', 'اكتمل توليد الخطة؛ جارٍ حفظ المهام وربطها بالمشروع…');
+    final record = ProjectRecord(
+      id: id, name: name, request: request, workspacePath: workspacePath,
+      createdAt: draft.createdAt, tasks: tasks,
+    );
+    final latest = await listProjects();
+    final latestIndex = latest.indexWhere((item) => item.id == id);
+    if (latestIndex >= 0) {
+      latest[latestIndex] = record;
+    } else {
+      latest.insert(0, record);
+    }
+    await _saveProjects(latest);
+    try {
+      await memory.addTeam('تم إنشاء مشروع $name وجرى إعداد خطة من ${tasks.length} مهام.');
+      await memory.addProject(id, 'طلب المستخدم: $request');
+    } catch (_) {
+      // The saved project plan remains authoritative if ancillary memory logging fails.
+    }
+    await onProgress?.call('complete', 'تم حفظ الخطة؛ وهي بانتظار موافقتك قبل التنفيذ.');
     return record;
   }
+
 
   Future<ProjectRecord> execute(ProjectRecord project, {int maxRepairAttempts = 3, void Function(PlanTask task)? onTaskChanged, ProjectExecutionControl? control}) async {
     final executionControl = control ?? ProjectExecutionControl();

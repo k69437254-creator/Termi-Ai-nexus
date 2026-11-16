@@ -26,23 +26,37 @@ class _AppShellState extends State<AppShell> {
   late final ProjectExecutionManager _executionManager =
       ProjectExecutionManager(coordinator: _coordinator);
   int _selected = 0;
+  // ARAM_NEXUS_SOURCE_UPDATE_20261116: retain stateful pages during navigation.
+  final Map<int, Widget> _pageCache = <int, Widget>{};
 
-  Widget _page() => switch (_selected) {
-        0 => OfficeScreen(onOpenAssistant: _openAssistant),
-        1 => AssistantScreen(coordinator: _coordinator, executionManager: _executionManager, onBack: () => setState(() => _selected = 0)),
-        2 => ProjectsScreen(
-            coordinator: _coordinator,
-            executionManager: _executionManager,
-          ),
-        3 => const ControlScreen(),
-        4 => const TerminalScreen(),
-        5 => const GitHubScreen(),
-        6 => const AgentsScreen(),
-        7 => const SettingsScreen(),
-        8 => const EngineCenterScreen(),
-        9 => NexusFeatureLabScreen(coordinator: _coordinator),
-        _ => OfficeScreen(onOpenAssistant: _openAssistant),
-      };
+  Widget _pageFor(int index) => _pageCache.putIfAbsent(
+        index,
+        () => switch (index) {
+          0 => OfficeScreen(onOpenAssistant: _openAssistant),
+          1 => AssistantScreen(coordinator: _coordinator, executionManager: _executionManager, onBack: () => setState(() => _selected = 0)),
+          2 => ProjectsScreen(coordinator: _coordinator, executionManager: _executionManager),
+          3 => const ControlScreen(),
+          4 => const TerminalScreen(),
+          5 => const GitHubScreen(),
+          6 => const AgentsScreen(),
+          7 => const SettingsScreen(),
+          8 => const EngineCenterScreen(),
+          9 => NexusFeatureLabScreen(coordinator: _coordinator),
+          _ => OfficeScreen(onOpenAssistant: _openAssistant),
+        },
+      );
+
+  Widget _buildCachedPages() {
+    _pageFor(_selected);
+    return Stack(children: [
+      for (final entry in _pageCache.entries)
+        Offstage(
+          offstage: entry.key != _selected,
+          child: TickerMode(enabled: entry.key == _selected, child: entry.value),
+        ),
+    ]);
+  }
+
 
   void _openAssistant() => setState(() => _selected = 1);
 
@@ -221,21 +235,7 @@ class _AppShellState extends State<AppShell> {
             bottom: _selected == 1,
             child: Column(children: [
               if (_selected != 1) _buildNeuralStrip(),
-              Expanded(
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 320),
-                  switchInCurve: Curves.easeOutCubic,
-                  switchOutCurve: Curves.easeInCubic,
-                  transitionBuilder: (child, animation) => FadeTransition(
-                    opacity: animation,
-                    child: SlideTransition(
-                      position: Tween<Offset>(begin: const Offset(0, 0.018), end: Offset.zero).animate(animation),
-                      child: child,
-                    ),
-                  ),
-                  child: KeyedSubtree(key: ValueKey(_selected), child: _page()),
-                ),
-              ),
+              Expanded(child: _buildCachedPages()),
             ]),
           ),
         ),

@@ -175,45 +175,6 @@ class _EngineCenterScreenState extends State<EngineCenterScreen> {
     }
   }
 
-  Future<void> _importModel() async {
-    if (_busy || _isReady || _isImporting || _isDownloading || _isStarting) return;
-    setState(() => _busy = true);
-    try {
-      final imported = await _channel.invokeMethod<bool>('importModel');
-      if (imported == true) {
-        if (mounted) _showMessage('تم استيراد ملف GGUF والتحقق منه. بدأ تشغيل النموذج الآن.');
-        await _channel.invokeMethod<bool>('start');
-      } else if (mounted) {
-        _showMessage('تم إلغاء اختيار ملف النموذج.');
-      }
-      await _refreshStatus(silent: true);
-    } on PlatformException catch (error) {
-      if (mounted) _showMessage(error.message ?? 'تعذر فتح منتقي الملفات');
-    } catch (error) {
-      if (mounted) _showMessage('فشل استيراد أو تشغيل النموذج: $error');
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _cancelDownload() async {
-    if (_busy || !_isDownloading) return;
-    setState(() => _busy = true);
-    try {
-      final cancelled = await _channel.invokeMethod<bool>('cancelDownload');
-      if (mounted) {
-        _showMessage(cancelled == true ? 'تم إلغاء التنزيل وحذف مهمة Download Manager.' : 'لم يتمكن Android من العثور على مهمة التنزيل.');
-      }
-      await _refreshStatus(silent: true);
-    } on PlatformException catch (error) {
-      if (mounted) _showMessage(error.message ?? 'تعذر إلغاء التنزيل');
-    } catch (error) {
-      if (mounted) _showMessage('حدث خطأ أثناء إلغاء التنزيل: $error');
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
   void _showMessage(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -313,8 +274,6 @@ class _EngineCenterScreenState extends State<EngineCenterScreen> {
           const Text('يستمر Android في إدارة التنزيل حتى عند الانتقال إلى شاشة أخرى. بعد اكتماله وفحص GGUF يبدأ المحرك عند فتح هذه الشاشة. قد يتجاوز حجم النموذج 1 GB؛ راقب استهلاك بيانات الهاتف.', style: TextStyle(color: NexusPalette.muted, fontSize: 10, height: 1.5)),
           if (_transferPaused)
             const Padding(padding: EdgeInsets.only(top: 8), child: Text('التنزيل متوقف من مدير تنزيلات Android. تحقق من اتصال الشبكة أو قيود النظام ثم أعد المحاولة.', style: TextStyle(color: NexusPalette.warning, fontSize: 10, height: 1.5))),
-          const SizedBox(height: 10),
-          OutlinedButton.icon(onPressed: _busy ? null : _cancelDownload, icon: const Icon(Icons.close_rounded), label: const Text('إلغاء التنزيل')),
         ],
         if (_state == 'IMPORTING_MODEL')
           const Text('يتم نسخ الملف مباشرة إلى مساحة التطبيق الخاصة، ثم فحص ترويسة GGUF وحجمه قبل اعتماده.', style: TextStyle(color: NexusPalette.muted, fontSize: 10, height: 1.5)),
@@ -331,7 +290,7 @@ class _EngineCenterScreenState extends State<EngineCenterScreen> {
           children: [
             NexusPageHeader(
               title: 'مركز محرك Aram AI',
-              subtitle: 'تنزيل النموذج واستيراده وتشغيله ومتابعة كل مرحلة داخل التطبيق.',
+              subtitle: 'حالة النموذج والذاكرة وطابور الطلبات — التهيئة المركزية من شاشة البداية.',
               padding: const EdgeInsets.fromLTRB(0, 12, 0, 18),
               trailing: IconButton(tooltip: 'تحديث الحالة', onPressed: _loading ? null : () => _refreshStatus(), icon: const Icon(Icons.refresh_rounded)),
             ),
@@ -359,39 +318,19 @@ class _EngineCenterScreenState extends State<EngineCenterScreen> {
             _sectionCard(
               title: 'إدارة النموذج',
               icon: Icons.folder_open_rounded,
-              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                const Text('استخدم ملف GGUF موجودًا على الهاتف أو نزّل نسخة Spark-X2.6-1.7B مباشرة إلى مساحة TermiAI-Nexus. بعد الاستيراد يبدأ تشغيل المحرك تلقائيًا.', style: TextStyle(color: NexusPalette.muted, fontSize: 11, height: 1.5)),
-                const SizedBox(height: 13),
-                FilledButton.icon(
-                  onPressed: _busy || _isReady || _isImporting || _isDownloading || _isStarting ? null : _importModel,
-                  icon: const Icon(Icons.file_upload_outlined),
-                  label: const Text('استيراد نموذج GGUF من الهاتف'),
-                ),
-                const SizedBox(height: 9),
-                OutlinedButton.icon(
-                  onPressed: _busy || _modelAvailable || _isDownloading || _isImporting || _isStarting ? null : () => _runAction('downloadModel'),
-                  icon: const Icon(Icons.download_rounded),
-                  label: const Text('تنزيل Spark-X2.6-1.7B'),
-                ),
-              ]),
+              child: const Text(
+                'يتم تنزيل نموذج GGUF أو استيراده وتشغيله من شاشة البداية فقط، لضمان اجتياز فحص الجاهزية قبل دخول مساحة العمل. هذه الصفحة مخصصة لمراقبة الحالة والتشخيص.',
+                style: TextStyle(color: NexusPalette.muted, fontSize: 11, height: 1.5),
+              ),
             ),
             if (_showProgress) _progressCard(),
             _sectionCard(
               title: 'التحكم بالمحرك',
               icon: Icons.settings_suggest_rounded,
-              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                FilledButton.icon(
-                  onPressed: _busy || !_modelAvailable || _isReady || _isImporting || _isDownloading || _isStarting ? null : () => _runAction('start'),
-                  icon: const Icon(Icons.play_arrow_rounded),
-                  label: const Text('تشغيل النموذج والمحرك'),
-                ),
-                const SizedBox(height: 9),
-                OutlinedButton.icon(
-                  onPressed: _busy || _isDownloading || _isImporting || (_state == 'STOPPED' && !_loaded) ? null : () => _runAction('stop'),
-                  icon: const Icon(Icons.stop_rounded),
-                  label: const Text('إيقاف المحرك'),
-                ),
-              ]),
+              child: const Text(
+                'يبدأ المحرك تلقائيًا بعد تجهيز النموذج من شاشة البداية. هذه الصفحة لا تنفذ تنزيلًا أو استيرادًا أو تشغيلًا منفصلًا.',
+                style: TextStyle(color: NexusPalette.muted, fontSize: 11, height: 1.5),
+              ),
             ),
             _sectionCard(
               title: 'الربط مع المساعد الذكي',

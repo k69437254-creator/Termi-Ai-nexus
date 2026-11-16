@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:material_ui/material_ui.dart';
-import 'package:flutter/services.dart' show PlatformException;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -27,7 +26,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
   final StringBuffer _output = StringBuffer();
   StreamSubscription<Map<String, dynamic>>? _subscription;
   StreamSubscription<Map<String, dynamic>>? _installProgressSubscription;
-  bool _installPromptOpen = false;
   String _installStage = '';
   String _installStageMessage = '';
   int? _downloadedBytes;
@@ -42,6 +40,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
   @override
   void initState() {
     super.initState();
+    // ARAM_NEXUS_SOURCE_UPDATE_20261116: observe a single event stream for the screen lifetime.
+    _installProgressSubscription = _linux.installEvents.listen(_onInstallProgress,
+      onError: (Object error) {
+        if (mounted) setState(() => _installStageMessage = 'تعذر استقبال تقدم التهيئة: $error');
+      },
+    );
     unawaited(_refreshLinux());
     _subscription = _pty.events.listen(
       _onEvent,
@@ -73,136 +77,45 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
   Future<void> _refreshLinux() async {
     try {
-      final installed = await _linux.isInstalled();
+      final snapshot = await _linux.installStatus();
+      final installed = snapshot['installed'] == true || await _linux.isInstalled();
       if (!mounted) return;
-      setState(() {
-        _linuxInstalled = installed;
-        _status = installed
-            ? 'Ubuntu 24.04.5 LTS • ARM64 • PRoot جاهز'
-            : 'Ubuntu غير مثبت — جهّز بيئة Linux داخل التطبيق';
-      });
+      _applyInstallSnapshot(<String, dynamic>{...snapshot, 'installed': installed});
     } catch (error) {
       if (mounted) setState(() => _status = 'تعذر فحص Linux: $error');
     }
   }
 
-  Future<void> _installLinux() async {
-    if (_installPromptOpen || _installingLinux || _busy || _linuxInstalled) {
-      return;
-    }
+  void _onInstallProgress(Map<String, dynamic> event) => _applyInstallSnapshot(event);
 
-    _installPromptOpen = true;
-    try {
-      final accepted = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('تهيئة Ubuntu Linux'),
-          content: const Text(
-            'سيُنزل التطبيق نظام Ubuntu 24.04.5 ARM64 من خوادم Canonical الرسمية، ثم يتحقق من SHA-256 ويثبت Git وGitHub CLI وأدوات التطوير داخل مساحة التطبيق الخاصة.\n\n'
-            'تحتاج العملية اتصالاً بالإنترنت ومساحة تخزين فارغة لا تقل عن 1.2 GB. لا تحتاج إلى root أو تثبيت Termux خارجي.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('إلغاء'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('متابعة التهيئة'),
-            ),
-          ],
-        ),
-      );
-
-      if (accepted != true || !mounted) return;
-
-      setState(() {
-        _installingLinux = true;
-        _installStage = 'prepare';
-        _installStageMessage = 'جارٍ بدء تهيئة Ubuntu…';
-        _downloadedBytes = null;
-        _totalBytes = null;
-        _downloadProgress = null;
-        _status = _installStageMessage;
-      });
-
-      await _installProgressSubscription?.cancel();
-      _installProgressSubscription = _linux.installEvents.listen(
-        (event) {
-          if (!mounted) return;
-          final stage = event['stage']?.toString() ?? '';
-          final message = event['message']?.toString() ?? '';
-          final downloaded = event['downloadedBytes'];
-          final total = event['totalBytes'];
-          final percent = event['percent'];
-
-          setState(() {
-            _installStage = stage;
-            if (message.isNotEmpty) {
-              _installStageMessage = message;
-              _status = message;
-            }
-            if (downloaded is num) _downloadedBytes = downloaded.toInt();
-            if (total is num) _totalBytes = total.toInt();
-            _downloadProgress = stage == 'download' && percent is num
-                ? (percent.toDouble() / 100.0).clamp(0.0, 1.0).toDouble()
-                : null;
-          });
-        },
-        onError: (Object error) {
-          if (mounted) {
-            setState(() {
-              _installStageMessage = 'تعذر استقبال تقدم التهيئة: $error';
-            });
-          }
-        },
-      );
-
-      final result = await _linux.install();
-      if (!mounted) return;
-
-      setState(() {
-        _linuxInstalled = result['installed'] == true;
-        _installStage = _linuxInstalled ? 'complete' : 'error';
-        _installStageMessage = _linuxInstalled
-            ? 'اكتملت تهيئة Ubuntu بنجاح.'
-            : 'لم يكتمل تثبيت Ubuntu.';
-        _status = _linuxInstalled
-            ? 'Ubuntu 24.04.5 LTS جاهز — Git وGitHub CLI مثبتان'
-            : 'لم يكتمل تثبيت Ubuntu.';
-        if (_linuxInstalled) {
-          _output.write('\n[PASS] Ubuntu 24.04.5 LTS installed and verified.\n');
-          _output.write('[PASS] git and gh are available inside the Linux guest.\n');
-        }
-      });
-    } catch (error, stackTrace) {
-      if (mounted) {
-        final busyError =
-            error is PlatformException && error.code == 'LINUX_INSTALL_BUSY';
-        setState(() {
-          _status = busyError
-              ? 'هناك عملية تهيئة Ubuntu قيد التشغيل بالفعل؛ انتظر انتهائها.'
-              : 'فشل تهيئة Ubuntu؛ راجع سجل الطرفية للتفاصيل';
-          _installStage = 'error';
-          _installStageMessage = _status;
-          _output
-            ..write('\n[LINUX INSTALL FAILED]\n')
-            ..write('$error\n')
-            ..write('$stackTrace\n');
-        });
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_scroll.hasClients) {
-            _scroll.jumpTo(_scroll.position.maxScrollExtent);
-          }
-        });
+  void _applyInstallSnapshot(Map<String, dynamic> event) {
+    if (!mounted) return;
+    final stage = event['stage']?.toString() ?? '';
+    final message = event['message']?.toString() ?? '';
+    final downloaded = event['downloadedBytes'];
+    final total = event['totalBytes'];
+    final percent = event['percent'];
+    final installed = event['installed'] == true || stage == 'complete';
+    setState(() {
+      if (stage.isNotEmpty && stage != 'idle') _installStage = stage;
+      if (message.isNotEmpty) { _installStageMessage = message; _status = message; }
+      if (downloaded is num) _downloadedBytes = downloaded.toInt();
+      if (total is num) _totalBytes = total.toInt();
+      _downloadProgress = stage == 'download' && percent is num
+          ? (percent.toDouble() / 100.0).clamp(0.0, 1.0).toDouble() : null;
+      _installingLinux = event['active'] == true;
+      if (installed) {
+        _linuxInstalled = true;
+        _installingLinux = false;
+        _installStage = 'complete';
+        _installStageMessage = message.isEmpty ? 'اكتملت تهيئة Ubuntu بنجاح.' : message;
+        _status = 'Ubuntu 24.04.5 LTS جاهز — Git وGitHub CLI وأدوات التطوير مثبتة';
+      } else if (stage == 'interrupted') {
+        _installingLinux = false;
       }
-    } finally {
-      _installPromptOpen = false;
-      await _installProgressSubscription?.cancel();
-      _installProgressSubscription = null;
-      if (mounted) setState(() => _installingLinux = false);
-    }
+    });
   }
+
 
   String _formatInstallBytes(int bytes) {
     const mb = 1024 * 1024;
@@ -487,14 +400,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
                       child: Row(
                         children: [
                           if (!_linuxInstalled)
-                            FilledButton.icon(
-                              onPressed: _busy || _installingLinux
-                                  ? null
-                                  : _installLinux,
-                              icon: const Icon(Icons.download_rounded),
-                              label: Text(_installingLinux
-                                  ? 'جارٍ التثبيت…'
-                                  : 'تهيئة Ubuntu'),
+                            const Expanded(
+                              child: Text(
+                                'تهيئة Ubuntu وأدوات Linux تتم مركزيًا من شاشة البداية.',
+                                style: TextStyle(color: Color(0xFFF59E0B), fontSize: 10),
+                              ),
                             )
                           else if (!_running)
                             FilledButton.icon(

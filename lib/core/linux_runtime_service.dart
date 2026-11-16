@@ -17,6 +17,12 @@ class LinuxRuntimeService {
   Future<bool> isInstalled() async =>
       await _channel.invokeMethod<bool>('isInstalled') ?? false;
 
+  // ARAM_NEXUS_SOURCE_UPDATE_20261116: query persisted installation state after reconnecting.
+  Future<Map<String, dynamic>> installStatus() async {
+    final value = await _channel.invokeMapMethod<String, dynamic>('installStatus');
+    return value ?? <String, dynamic>{};
+  }
+
   Future<Map<String, dynamic>> install() async {
     final result = await _channel.invokeMapMethod<String, dynamic>('install');
     if (result == null || result['installed'] != true) {
