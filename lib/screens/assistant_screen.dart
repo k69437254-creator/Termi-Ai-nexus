@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:material_ui/material_ui.dart';
 import 'package:uuid/uuid.dart';
 
@@ -248,7 +249,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
   }
 
   Future<void> _classifyAndContinue(ProjectPlanningJob job, String request, String history) async {
-    var current = job.copyWith(stage: 'understanding', status: 'running',
+    final current = job.copyWith(stage: 'understanding', status: 'running',
       message: 'جارٍ فهم الطلب وتصنيفه بواسطة المدير الرئيسي…');
     await _savePlanningJob(current);
     if (_looksLikeExplicitProjectRequest(request)) {

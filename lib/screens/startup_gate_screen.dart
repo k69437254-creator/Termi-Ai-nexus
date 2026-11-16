@@ -166,8 +166,11 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
           _linuxState = linuxStatus['message']?.toString() ?? 'تهيئة Linux مستمرة';
         }
         _canEnter = _modelReady && _linuxReady;
-        if (_canEnter) _overall = 'اكتمل فحص الموارد والمحرك. يمكنك الدخول إلى التطبيق.';
-        else if (!silent && !_working) _overall = 'لم تكتمل جميع متطلبات التشغيل بعد.';
+        if (_canEnter) {
+          _overall = 'اكتمل فحص الموارد والمحرك. يمكنك الدخول إلى التطبيق.';
+        } else if (!silent && !_working) {
+          _overall = 'لم تكتمل جميع متطلبات التشغيل بعد.';
+        }
       });
       // Resume an interrupted install or attach to a still-running native download/install.
       // A fresh first run remains opt-in so it never starts a large download unexpectedly.
@@ -249,10 +252,12 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
       await _refreshStatus(silent: true);
       if (!_canEnter) throw StateError('لم تكتمل الجاهزية النهائية للنموذج وUbuntu.');
     } catch (error) {
-      if (mounted) setState(() {
-        _failure = error.toString();
-        _overall = 'لم تكتمل التهيئة. عالج السبب الظاهر ثم أعد المحاولة.';
-      });
+      if (mounted) {
+        setState(() {
+          _failure = error.toString();
+          _overall = 'لم تكتمل التهيئة. عالج السبب الظاهر ثم أعد المحاولة.';
+        });
+      }
     } finally {
       if (mounted) setState(() => _working = false);
       await _refreshStatus(silent: true);
