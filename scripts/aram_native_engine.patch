@@ -460,7 +460,7 @@ index a293796f9..64d1e1979 100644
              }
          }
      }
-@@ -178,11 +184,31 @@ internal class InferenceEngineImpl private constructor(
+@@ -178,11 +184,32 @@ internal class InferenceEngineImpl private constructor(
                  _state.value = InferenceEngine.State.ModelReady
              } catch (e: Exception) {
                  Log.e(TAG, (e.message ?: "Error loading model") + "\n" + pathToModel, e)
@@ -479,7 +479,7 @@ index a293796f9..64d1e1979 100644
 +    /**
 +     * Clear the previous conversation without unloading the model.
 +     */
-+    override suspend fun resetConversation() =
++    override suspend fun resetConversation(): Unit =
 +        withContext(llamaDispatcher) {
 +            check(_state.value is InferenceEngine.State.ModelReady) {
 +                "Cannot reset conversation in ${_state.value.javaClass.simpleName}"
@@ -487,6 +487,7 @@ index a293796f9..64d1e1979 100644
 +            resetConversationNative()
 +            _readyForSystemPrompt = true
 +            Log.i(TAG, "Conversation state reset.")
++            Unit
 +        }
 +
      /**
