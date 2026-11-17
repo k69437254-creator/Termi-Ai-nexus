@@ -177,6 +177,7 @@ object AramEngineChannel {
                     }
                     "status" -> {
                         ModelFiles.reconcileCompletedDownload(context)
+                        AppPrefs.reconcileEngineState(context, AramEngineService.isServiceAlive())
                         val status = AppPrefs.engineStatus(context)
                         val payload = mutableMapOf<String, Any?>(
                             "state" to status.state,

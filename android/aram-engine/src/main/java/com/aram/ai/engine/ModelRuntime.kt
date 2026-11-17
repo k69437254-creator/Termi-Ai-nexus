@@ -40,8 +40,6 @@ object ModelRuntime {
     @Volatile private var engine: InferenceEngine? = null
     @Volatile private var loaded: Boolean = false
     @Volatile private var acceptingRequests: Boolean = false
-    // SYSTEM_PROMPT_REUSE_FIX_V1: upstream accepts setSystemPrompt only once after load.
-    @Volatile private var systemPromptConfigured: Boolean = false
 
     private class QueuedGeneration(
         val requestId: String,
@@ -152,14 +150,12 @@ object ModelRuntime {
             }
             if (initializedState is InferenceEngine.State.Error) throw initializedState.exception
             withContext(Dispatchers.IO) { instance.loadModel(modelFile.absolutePath) }
-            systemPromptConfigured = false
             loaded = true
             acceptingRequests = true
             Log.i(TAG, "MODEL_LOAD_SUCCESS pid=${Process.myPid()} engine=${System.identityHashCode(instance)}")
         } catch (failure: Throwable) {
             acceptingRequests = false
             loaded = false
-            systemPromptConfigured = false
             Log.e(TAG, "MODEL_LOAD_FAILED pid=${Process.myPid()}", failure)
             throw failure
         }
@@ -299,6 +295,9 @@ object ModelRuntime {
 
     private suspend fun runGeneration(request: QueuedGeneration): String = generationLock.withLock {
         val output = StringBuilder()
+        val generationStartedAtNanos = System.nanoTime()
+        var firstOutputAtNanos = 0L
+        var emittedPieces = 0
         var generationRegistered = false
         try {
             // Atomically validate the engine and register native work while holding
@@ -325,26 +324,28 @@ object ModelRuntime {
                 current
             }
 
-            if (!systemPromptConfigured) {
-                instance.setSystemPrompt(DEFAULT_NATIVE_SYSTEM_PROMPT)
-                systemPromptConfigured = true
-                Log.i(TAG, "NATIVE_SYSTEM_PROMPT_SET pid=${Process.myPid()}")
-            }
-            val effectivePrompt = buildString {
-                append("تعليمات هذه الرسالة:\n")
-                append(request.systemPrompt.ifBlank { DEFAULT_NATIVE_SYSTEM_PROMPT })
-                append("\n\nرسالة المستخدم:\n")
-                append(request.prompt)
-            }
+            // ARAM_ISOLATED_REQUEST_CONTEXT_V2: isolate request and keep agent instructions in the system role.
+            instance.resetConversation()
+            instance.setSystemPrompt(
+                request.systemPrompt.ifBlank { DEFAULT_NATIVE_SYSTEM_PROMPT }
+            )
+            Log.i(TAG, "NATIVE_REQUEST_CONTEXT_RESET pid=${Process.myPid()}")
+
             withContext(Dispatchers.Default) {
-                instance.sendUserPrompt(effectivePrompt, request.maxTokens).collect { token ->
+                instance.sendUserPrompt(request.prompt, request.maxTokens).collect { token ->
                     output.append(token)
+                    emittedPieces++
+                    if (firstOutputAtNanos == 0L) firstOutputAtNanos = System.nanoTime()
                     request.onToken(token)
                 }
             }
             output.toString()
         } finally {
             if (generationRegistered) {
+                val elapsedNanos = (System.nanoTime() - generationStartedAtNanos).coerceAtLeast(1L)
+                val ttftMs = if (firstOutputAtNanos == 0L) -1L else (firstOutputAtNanos - generationStartedAtNanos) / 1_000_000L
+                val piecesPerSecond = emittedPieces * 1_000_000_000.0 / elapsedNanos
+                Log.i(TAG, "GENERATION_METRICS requestId=${request.requestId.take(48)} totalMs=${elapsedNanos / 1_000_000L} ttftMs=$ttftMs emittedPieces=$emittedPieces piecesPerSecond=$piecesPerSecond promptChars=${request.prompt.length}")
                 AramEngineService.onGenerationFinished()
             }
         }
@@ -398,8 +399,7 @@ object ModelRuntime {
                 engine = null
                 loaded = false
                 acceptingRequests = false
-                systemPromptConfigured = false
-                if (current != null) withContext(Dispatchers.IO) { current.cleanUp() }
+                    if (current != null) withContext(Dispatchers.IO) { current.cleanUp() }
                 Log.i(TAG, "MODEL_UNLOAD_COMPLETE pid=${Process.myPid()} reason=$reason")
             }
         }

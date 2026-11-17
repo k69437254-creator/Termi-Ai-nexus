@@ -166,7 +166,7 @@ class ProjectCoordinator {
             allowFileWrites: task.agentId != 'qa',
           );
           try {
-            final workspaceContext = await workspace.readContextSnapshot(maxFiles: 20, maxCharacters: 24000);
+            final workspaceContext = await workspace.readContextSnapshot(maxFiles: 12, maxCharacters: 6000);
             if (executionControl.cancelRequested) {
               throw const _ProjectExecutionCancelled();
             }

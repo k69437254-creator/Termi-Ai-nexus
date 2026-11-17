@@ -9,10 +9,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
 import java.io.PipedInputStream
 import java.io.PipedOutputStream
 import java.nio.charset.StandardCharsets
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 
 class ApiHttpServer(
     host: String,
@@ -75,7 +77,7 @@ class ApiHttpServer(
             }
             prompt.append("ASSISTANT:")
             val systemPrompt = system.toString().ifBlank { "أنت مساعد Aram AI. أجب بدقة ووضوح." }
-            val maxTokens = request.optInt("max_tokens", 256).coerceIn(32, 512)
+            val maxTokens = request.optInt("max_tokens", 256).coerceIn(32, 2048)
             if (!keyStore.consumeRequest(key.id)) return rateLimited()
             val priority = if (key.isOwner) OWNER_PRIORITY else CLIENT_PRIORITY
             if (request.optBoolean("stream", false)) {
@@ -113,27 +115,38 @@ class ApiHttpServer(
         val input = PipedInputStream(64 * 1024)
         val output = PipedOutputStream(input)
         val id = "chatcmpl-${UUID.randomUUID()}"
+        val requestId = UUID.randomUUID().toString()
+        val clientConnected = AtomicBoolean(true)
         val created = System.currentTimeMillis() / 1000
         Thread {
             try {
                 runBlocking(Dispatchers.IO) {
-                    ModelRuntime.generate(prompt, system, maxTokens, priority) { token ->
-                        val chunk = JSONObject().put("id", id).put("object", "chat.completion.chunk")
-                            .put("created", created).put("model", ModelFiles.MODEL_ID)
-                            .put("choices", JSONArray().put(JSONObject().put("index", 0)
-                                .put("delta", JSONObject().put("content", token)).put("finish_reason", JSONObject.NULL)))
-                        output.write(("data: $chunk\n\n").toByteArray(StandardCharsets.UTF_8))
-                        output.flush()
+                    ModelRuntime.generate(prompt, system, maxTokens, priority, requestId = requestId) { token ->
+                        if (clientConnected.get()) {
+                            try {
+                                val chunk = JSONObject().put("id", id).put("object", "chat.completion.chunk")
+                                    .put("created", created).put("model", ModelFiles.MODEL_ID)
+                                    .put("choices", JSONArray().put(JSONObject().put("index", 0)
+                                        .put("delta", JSONObject().put("content", token)).put("finish_reason", JSONObject.NULL)))
+                                output.write(("data: $chunk\n\n").toByteArray(StandardCharsets.UTF_8))
+                                output.flush()
+                            } catch (_: IOException) {
+                                clientConnected.set(false)
+                                ModelRuntime.cancelRequest(requestId)
+                            }
+                        }
                     }
                 }
-                val finish = JSONObject().put("id", id).put("object", "chat.completion.chunk")
-                    .put("created", created).put("model", ModelFiles.MODEL_ID)
-                    .put("choices", JSONArray().put(JSONObject().put("index", 0)
-                        .put("delta", JSONObject()).put("finish_reason", "stop")))
-                output.write(("data: $finish\n\ndata: [DONE]\n\n").toByteArray(StandardCharsets.UTF_8))
-                output.flush()
+                if (clientConnected.get()) {
+                    val finish = JSONObject().put("id", id).put("object", "chat.completion.chunk")
+                        .put("created", created).put("model", ModelFiles.MODEL_ID)
+                        .put("choices", JSONArray().put(JSONObject().put("index", 0)
+                            .put("delta", JSONObject()).put("finish_reason", "stop")))
+                    output.write(("data: $finish\n\ndata: [DONE]\n\n").toByteArray(StandardCharsets.UTF_8))
+                    output.flush()
+                }
             } catch (error: Exception) {
-                runCatching {
+                if (clientConnected.get()) runCatching {
                     val payload = JSONObject().put("error", JSONObject().put("message", error.message ?: "generation failed"))
                     output.write(("data: $payload\n\ndata: [DONE]\n\n").toByteArray(StandardCharsets.UTF_8))
                 }

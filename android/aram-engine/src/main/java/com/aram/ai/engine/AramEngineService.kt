@@ -385,6 +385,8 @@ class AramEngineService : Service() {
     companion object {
         @Volatile private var activeService: AramEngineService? = null
 
+        fun isServiceAlive(): Boolean = activeService != null
+
         fun onExecutionLeaseReleased() {
             activeService?.resumeDeferredStopIfReady()
         }

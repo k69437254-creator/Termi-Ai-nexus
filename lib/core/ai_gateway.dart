@@ -54,8 +54,9 @@ class AiGateway {
   Future<String> get model => _vault.read('ai.model');
 
   Future<String> chat({required String system, required String user, String? agentId, double temperature = 0.2, bool localEngineOnly = false, int maxTokens = 512, String? requestId, void Function(String token)? onToken}) async {
-    final endpoint = (await baseUrl).trim();
-    final selectedModel = (await model).trim();
+    // Forced-local requests do not need remote settings or secure-vault I/O.
+    final endpoint = localEngineOnly ? '' : (await baseUrl).trim();
+    final selectedModel = localEngineOnly ? '' : (await model).trim();
 
     // Use the in-process Android engine for blank/loopback endpoints. This avoids
     // the previously observed localhost HTTP stall between TermiAI and Aram AI.
@@ -122,6 +123,7 @@ class AiGateway {
         body: jsonEncode({
           'model': selectedModel,
           'temperature': temperature,
+          'max_tokens': maxTokens,
           'messages': [
             {'role': 'system', 'content': system},
             {'role': 'user', 'content': user},
@@ -283,10 +285,13 @@ class AiGateway {
   }
 
   Future<List<PlanTask>> createPlan(String request, String projectId, MemoryStore memory, {String? requestId}) async {
-    final teamMemory = await memory.contextFor(agentId: 'manager', projectId: projectId);
+    final teamMemory = _trim(
+      await memory.contextFor(agentId: 'manager', projectId: projectId),
+      1200,
+    );
     const system = '''أنت المدير الرئيسي في TermiAI-Nexus.
 حوّل طلب المستخدم إلى خطة تنفيذ عملية ومتسلسلة من 3 إلى 8 مهام. أعد JSON فقط بالشكل {"tasks":[{"id":"t1","title":"...","description":"...","agentId":"architect|developer|qa|security","risk":"low|medium|high"}]}.
-يجب أن تتضمن الخطة معماريًا عند الحاجة، ومهمة مطوّر واحدة على الأقل، ومهمة QA أخيرة دائمًا. يجب أن تنشئ مهام التطوير الاختبارات اللازمة قبل بدء QA. مهمة QA هي بوابة التسليم: تفحص ملفات واختبارات المهام السابقة وتشغّل تحققاً حقيقياً عبر run_command كآخر عملية أدوات، ثم تعيد نتائج التنفيذ الفعلية دون كتابة أي ملف. يتولى المنسّق إنشاء docs/QA_REPORT.md تلقائياً بعد التحقق من الأدلة. لا تضع QA قبل آخر مهمة. وزّع العمل على تخصصات الوكلاء ولا تكرر المهام. اجعل كل مهمة تنتج ملفات فعلية عند الحاجة، ولا تدّع التنفيذ أو نجاح اختبار لم يُشغّل. لا تطلب أوامر shell مركّبة ولا عمليات حذف أو نشر/رفع.''' ;
+يجب أن تتضمن الخطة معماريًا عند الحاجة، ومهمة مطوّر واحدة على الأقل، ومهمة QA أخيرة دائمًا. يجب أن تنشئ مهام التطوير الاختبارات اللازمة قبل بدء QA. مهمة QA هنا للقراءة والتحقق البنيوي فقط: تفحص الملفات والاختبارات وبنية Android عبر inspect_project، ولا تدّعي تشغيل الاختبارات أو البناء. يتولى المنسّق إنشاء docs/QA_REPORT.md من أدلة الفحص الفعلية. تُشغّل الاختبارات والبناء الحقيقيان في GitHub Actions بعد رفع المصدر، ولا يُعد التسليم ناجحًا إلا بعد نجاحهما. وزّع العمل على تخصصات الوكلاء ولا تكرر المهام. اجعل كل مهمة تنتج ملفات فعلية عند الحاجة، ولا تدّع التنفيذ أو نجاح اختبار لم يُشغّل. لا تطلب أوامر shell مركّبة ولا عمليات حذف أو نشر/رفع.''' ;
     final firstResponse = await chat(
       agentId: 'manager',
       temperature: 0.1,
@@ -390,7 +395,7 @@ class AiGateway {
   }) async {
     final context = _trim(
       await memory.contextFor(agentId: agentId, projectId: projectId),
-      3000,
+      1400,
     );
     final roleInstructions = switch (agentId) {
       'architect' => 'دورك المعماري: اقرأ بنية المشروع أولاً، حدّد العقود والاعتماديات ونقاط الدخول، واكتب وثيقة التصميم والواجهات بين الوحدات. لا تنفذ تغييرات خارج نطاق التصميم.',
@@ -411,7 +416,7 @@ $roleInstructions
 $roleToolInstructions
 تشغيل الأوامر يتم داخل Ubuntu/PRoot وبوسائط argv منفصلة، وليس داخل Android host. لا تفترض أن Flutter SDK أو Android SDK مثبت داخل الضيف؛ بوابة QA تستخدم inspect_project، والبناء الحقيقي يجري في GitHub Actions. استدعاء run_command بالشكل {"tool_call":{"name":"run_command","arguments":{"command":"flutter","args":["test"],"workingDirectory":"."}}}. لا تستخدم bash -c أو sh -c أو pipes أو أوامر حذف أو git push/commit/reset/clean أو عمليات GitHub الكتابية. عند تعذر أمر، اقرأ الخطأ ولا تزعم نجاحه.
 لا تضع نصاً خارج JSON ولا تختلق نتائج اختبار.''';
-    final boundedWorkspaceContext = _trim(workspaceContext, 14000);
+    final boundedWorkspaceContext = _trim(workspaceContext, 6000);
     final baseConversation = 'سياق الذاكرة:\n$context\n\nالمهمة: $taskTitle\n$taskDescription\n\nسياق المشروع الحالي:\n$boundedWorkspaceContext';
     var conversation = baseConversation;
     final toolHistory = <String>[];
@@ -454,13 +459,13 @@ $roleToolInstructions
         Map<String, dynamic>.from(toolCall['arguments'] as Map),
       );
       final encodedResult = jsonEncode(result);
-      toolHistory.add(encodedResult.length > 6000
+      toolHistory.add(encodedResult.length > 2000
           ? jsonEncode({
               'truncated': true,
-              'preview': encodedResult.substring(0, 6000),
+              'preview': encodedResult.substring(0, 2000),
             })
           : encodedResult);
-      if (toolHistory.length > 5) toolHistory.removeAt(0);
+      if (toolHistory.length > 3) toolHistory.removeAt(0);
       conversation = '$baseConversation\n\nآخر نتائج الأدوات (الأقدم محذوفة لتثبيت حجم السياق):\n${toolHistory.join('\n')}\n\nملفات staging الحالية: ${jsonEncode(toolRuntime.stagedPaths)}\nتابع التنفيذ اعتماداً على النتائج الفعلية، ثم أعد JSON النهائي مع stagedFiles.';
     }
     throw AiGatewayException('تجاوز الوكيل الحد الأقصى لاستدعاءات الأدوات ($maxToolCalls) دون تسليم نهائي.');

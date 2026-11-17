@@ -13,10 +13,42 @@ git -C "$SOURCE" fetch --depth 1 origin "$COMMIT"
 git -C "$SOURCE" checkout --detach "$COMMIT"
 test "$(git -C "$SOURCE" rev-parse HEAD)" = "$COMMIT"
 
-bash "$SOURCE/scripts/prepare_native.sh"
+# Fetch the exact upstream llama.cpp revision used by the verified native patch.
+LLAMA="$SOURCE/vendor/llama.cpp"
+LLAMA_COMMIT="a4d4f2fd4ec85ec6a0a9ece4870416c1b6cc24f5"
 
-# Preserve detailed GGUF/native loader diagnostics for Android error reporting.
+mkdir -p "$SOURCE/vendor"
+if [[ -e "$LLAMA" && ! -d "$LLAMA/.git" ]]; then
+  echo "Existing llama.cpp path is not a Git checkout; refusing to overwrite it." >&2
+  exit 1
+fi
+
+if [[ ! -d "$LLAMA/.git" ]]; then
+  git clone --filter=blob:none --no-checkout \
+    https://github.com/ggml-org/llama.cpp.git "$LLAMA"
+fi
+
+git -C "$LLAMA" fetch --depth 1 origin "$LLAMA_COMMIT"
+git -C "$LLAMA" checkout --detach "$LLAMA_COMMIT"
+test "$(git -C "$LLAMA" rev-parse HEAD)" = "$LLAMA_COMMIT"
+
+# Apply the reviewed native changes exactly once to the pinned clean source.
+git -C "$LLAMA" apply --check "$ROOT/scripts/aram_native_engine.patch"
+git -C "$LLAMA" apply "$ROOT/scripts/aram_native_engine.patch"
+
+# Verify critical native integration points before Gradle configuration.
+grep -q 'resetConversationNative' "$LLAMA/examples/llama.android/lib/src/main/cpp/ai_chat.cpp"
+grep -q 'chat_template_kwargs' "$LLAMA/common/chat.cpp"
+grep -q 'beginGeneration' "$LLAMA/examples/llama.android/lib/src/main/java/com/arm/aichat/InferenceEngine.kt"
+grep -q 'cancelGeneration' "$LLAMA/examples/llama.android/lib/src/main/java/com/arm/aichat/InferenceEngine.kt"
+
+# Preserve detailed GGUF loader errors for the Android error reporting layer.
 python3 "$ROOT/scripts/patch_native_load_diagnostics.py"
+
+grep -q 'ARAM_NATIVE_LOAD_DIAGNOSTICS_V1' "$LLAMA/examples/llama.android/lib/src/main/cpp/logging.h"
+grep -q 'lastModelLoadError' "$LLAMA/examples/llama.android/lib/src/main/java/com/arm/aichat/internal/InferenceEngineImpl.kt"
+
+echo "PASS: pinned llama.cpp native patch and load diagnostics applied."
 
 # The upstream Android binding uses its own version-catalog aliases. Adapt only
 # this pinned module to the host build's plugin/dependency declarations.
