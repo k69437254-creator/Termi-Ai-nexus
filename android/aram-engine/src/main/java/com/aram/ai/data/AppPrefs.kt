@@ -54,10 +54,26 @@ object AppPrefs {
     fun reconcileEngineState(context: Context, serviceAlive: Boolean) {
         if (serviceAlive) return
         val status = engineStatus(context)
-        val staleBusy = status.isBusy && System.currentTimeMillis() - status.updatedAt > 10_000L
+        // ARAM_STALE_ENGINE_DIAGNOSTICS_V1
+        val now = System.currentTimeMillis()
+        val staleAgeMs = (now - status.updatedAt).coerceAtLeast(0L)
+        val staleBusy = status.isBusy && staleAgeMs > 10_000L
         val staleReady = status.state == "READY"
-        if (staleBusy || staleReady) {
-            setEngineState(context, "STOPPED", "خدمة المحرك غير نشطة؛ شغّلها مجددًا عند الحاجة.")
+        if (staleBusy) {
+            val previousMessage = status.message.ifBlank { "لم تحفظ الخدمة رسالة إضافية قبل توقفها." }
+            val ageSeconds = staleAgeMs / 1_000L
+            setEngineState(
+                context,
+                "STOPPED",
+                "توقفت خدمة Aram AI بصورة غير متوقعة أثناء المرحلة ${status.state} " +
+                    "بعد $ageSeconds ثانية. آخر رسالة قبل التوقف: $previousMessage"
+            )
+        } else if (staleReady) {
+            setEngineState(
+                context,
+                "STOPPED",
+                "خدمة المحرك غير نشطة بعد أن كانت READY؛ شغّلها مجددًا عند الحاجة."
+            )
         }
     }
 

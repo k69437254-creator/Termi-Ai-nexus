@@ -123,6 +123,7 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
       final modelAvailable = engineStatus['modelAvailable'] == true;
       final loaded = engineStatus['loaded'] == true;
       final engineState = engineStatus['state']?.toString() ?? 'UNKNOWN';
+      final engineMessage = engineStatus['message']?.toString().trim() ?? '';
       final transferBytes = (engineStatus['transferBytes'] as num?)?.toInt() ?? 0;
       final transferTotal = (engineStatus['transferTotalBytes'] as num?)?.toInt() ?? -1;
       final transferStage = engineStatus['transferStage']?.toString() ?? '';
@@ -147,7 +148,12 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
           'LOADING_MODEL' => 'جارٍ تحميل أوزان النموذج في الذاكرة',
           'STARTING' || 'STARTING_SERVER' => 'جارٍ تشغيل محرك Aram AI',
           'ERROR' => 'تعذر تجهيز النموذج: ${engineStatus['message'] ?? ''}',
-          _ => modelAvailable ? 'ملف GGUF صالح؛ المحرك متوقف' : 'نموذج Aram AI غير موجود',
+          'STOPPED' => modelAvailable
+              ? 'ملف GGUF موجود، لكن المحرك متوقف: $engineMessage'
+              : 'المحرك متوقف: $engineMessage',
+          _ => modelAvailable
+              ? 'ملف GGUF موجود؛ حالة المحرك $engineState: $engineMessage'
+              : 'نموذج Aram AI غير موجود',
         };
         if (engineState == 'READY' && loaded && !inferenceReady) {
           _modelState = 'لم يكتمل اختبار الاستدلال الفعلي بعد';
@@ -211,9 +217,12 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
         }
       }
     }
+    // start() only acknowledges the Android service request, not model readiness.
+    var startRequestedAt = DateTime.now();
     if (status['loaded'] != true &&
         !{'STARTING', 'LOADING_MODEL', 'STARTING_SERVER'}.contains(state)) {
       await _engine.start();
+      startRequestedAt = DateTime.now();
     }
     while (true) {
       if (DateTime.now().isAfter(deadline)) {
@@ -225,6 +234,15 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
       if (status['modelAvailable'] == true && status['loaded'] == true && state == 'READY') return;
       if (state == 'ERROR') {
         throw StateError(status['message']?.toString() ?? 'فشل تشغيل نموذج Aram AI.');
+      }
+      if (state == 'STOPPED' &&
+          DateTime.now().difference(startRequestedAt) >= const Duration(seconds: 30)) {
+        final detail = status['message']?.toString().trim() ?? '';
+        throw StateError(
+          detail.isNotEmpty
+              ? 'توقفت خدمة المحرك قبل اكتمال تحميل النموذج: $detail'
+              : 'بقي المحرك في حالة STOPPED لأكثر من 30 ثانية بعد طلب تشغيله.',
+        );
       }
     }
   }
